@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <title>Magpie</title>
+  <rect x="0" y="0" width="200" height="200" rx="44" ry="44" fill="#f5ead0"/>
+  <path d="M 60 145 L 60 55 L 100 105 L 140 55 L 140 145"
+        fill="none"
+        stroke="#1a1a1a"
+        stroke-width="22"
+        stroke-linejoin="round"
+        stroke-linecap="round"/>
+  <circle cx="100" cy="160" r="6" fill="#0d8a8a"/>
+</svg>

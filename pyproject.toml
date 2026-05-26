@@ -1,0 +1,32 @@
+[project]
+name = "magpie"
+version = "1.0.0"
+description = "A keyboard-driven desktop image classification tool"
+readme = "magpie/README.md"
+requires-python = ">=3.11"
+authors = [{ name = "mangoa", email = "3508312371@qq.com" }]
+dependencies = [
+    "PyQt6>=6.4",
+    "Pillow>=10.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+magpie = "magpie.app:main"
+image-classifier = "magpie.app:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["magpie*"]
+
+[tool.setuptools.package-data]
+magpie = ["resources/icons/*.svg", "resources/icons/*.ico", "resources/icons/*.png"]

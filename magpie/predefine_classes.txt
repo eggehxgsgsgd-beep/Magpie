@@ -1,0 +1,27 @@
+﻿ignore
+police
+deliveryman 
+im
+stop
+stop_sideways
+stop_noraised
+straight_spread
+straight_same_direction
+straight_one_extended
+pullover
+gesture_turn_left
+gesture_turn_right
+police_Occlusion
+deliveryman _Occlusion
+im_Occlusion
+stop_Occlusion
+stop_sideways_Occlusion
+stop_noraised_Occlusion
+straight_spread_Occlusion
+straight_same_direction_Occlusion
+straight_one_extended_Occlusion
+pullover_Occlusion
+gesture_turn_left_Occlusion
+gesture_turn_right_Occlusion
+gesture_turn_left_nonstandard
+gesture_turn_right_nonstandard
