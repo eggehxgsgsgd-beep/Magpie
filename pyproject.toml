@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 authors = [{ name = "mangoa", email = "3508312371@qq.com" }]
 dependencies = [
     "PyQt6>=6.4",
+    "PyQt6-WebEngine>=6.4",
     "Pillow>=10.4",
 ]
 
@@ -29,4 +30,12 @@ build-backend = "setuptools.build_meta"
 include = ["magpie*"]
 
 [tool.setuptools.package-data]
-magpie = ["resources/icons/*.svg", "resources/icons/*.ico", "resources/icons/*.png"]
+magpie = [
+    "resources/icons/*.svg",
+    "resources/icons/*.ico",
+    "resources/icons/*.png",
+    "resources/web/*.html",
+    "resources/web/app/*.js",
+    "resources/web/app/*.jsx",
+    "resources/web/vendor/*.js",
+]

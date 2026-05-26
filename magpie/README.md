@@ -2,6 +2,14 @@
 
 Magpie 是一个键盘驱动的本地图像分类桌面工具，适合数据清洗和快速分桶。
 
+## 技术架构
+
+- UI 层：React + Babel Standalone（运行在 `QWebEngineView` 中的本地 HTML/JSX，资源位于
+  `magpie/resources/web/`）。
+- 后端：PyQt6 + Pillow，通过 `QWebChannel` 暴露文件夹扫描、图像加载、分类执行、
+  撤销/重做、偏好读写、冲突处理等接口（实现见 `magpie/ui/web_bridge.py`）。
+- React/Babel/qwebchannel.js 已离线打包到 `resources/web/vendor/`，应用无需联网即可工作。
+
 ## 安装开发环境
 
 ```bash
@@ -31,6 +39,9 @@ magpie
 - `Ctrl+C`：复制当前图片名
 - `F`：适应窗口
 - `0`：1:1 实际大小
+- `+` / `-`：放大 / 缩小
+- 滚轮：以鼠标位置为中心缩放
+- 拖拽：平移已放大的图片
 - `B`：切换 BBox 显示
 - `Ctrl+O`：打开图片文件夹
 - `Ctrl+,`：首选项

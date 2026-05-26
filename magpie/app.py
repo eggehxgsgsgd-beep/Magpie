@@ -2,10 +2,12 @@
 
 import argparse
 import logging
+import os
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
@@ -49,6 +51,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     configure_logging()
+
+    # QtWebEngine requires a software-friendly OpenGL backend on some Windows
+    # drivers; setting ShareOpenGLContexts here is required to use the engine
+    # alongside other Qt OpenGL surfaces and must be done before QApplication.
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+
     app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
     app.setApplicationName("Magpie")
     app.setOrganizationName("Magpie")

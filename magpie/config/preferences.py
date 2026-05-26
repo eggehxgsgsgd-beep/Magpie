@@ -11,18 +11,18 @@ from .paths import preferences_path
 
 DEFAULT_EXTENSIONS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
 DEFAULT_PALETTE = [
-    "#4CAF50",
-    "#2196F3",
-    "#FF9800",
-    "#E91E63",
-    "#9C27B0",
-    "#00BCD4",
-    "#8BC34A",
-    "#FFC107",
-    "#795548",
-    "#607D8B",
-    "#F44336",
-    "#3F51B5",
+    "#22C55E",
+    "#3B82F6",
+    "#F59E0B",
+    "#EF4444",
+    "#A855F7",
+    "#EC4899",
+    "#14B8A6",
+    "#F97316",
+    "#6366F1",
+    "#84CC16",
+    "#06B6D4",
+    "#78716C",
 ]
 
 

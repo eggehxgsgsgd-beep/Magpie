@@ -7,6 +7,11 @@ from PyInstaller.utils.hooks import collect_all
 root = Path.cwd()
 
 datas, binaries, hiddenimports = collect_all("PyQt6")
+for sub in ("PyQt6.QtWebEngineCore", "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebChannel"):
+    sd, sb, sh = collect_all(sub)
+    datas += sd
+    binaries += sb
+    hiddenimports += sh
 pil_datas, pil_binaries, pil_hiddenimports = collect_all("PIL")
 datas += pil_datas
 binaries += pil_binaries
@@ -30,14 +35,6 @@ excluded_modules = [
     "PyQt6.QtMultimedia",
     "PyQt6.QtMultimediaWidgets",
     "PyQt6.QtNfc",
-    "PyQt6.QtPdf",
-    "PyQt6.QtPdfWidgets",
-    "PyQt6.QtPositioning",
-    "PyQt6.QtQml",
-    "PyQt6.QtQuick",
-    "PyQt6.QtQuick3D",
-    "PyQt6.QtQuickControls2",
-    "PyQt6.QtQuickWidgets",
     "PyQt6.QtRemoteObjects",
     "PyQt6.QtSensors",
     "PyQt6.QtSerialBus",
@@ -45,11 +42,6 @@ excluded_modules = [
     "PyQt6.QtSpatialAudio",
     "PyQt6.QtSql",
     "PyQt6.QtTextToSpeech",
-    "PyQt6.QtWebChannel",
-    "PyQt6.QtWebEngine",
-    "PyQt6.QtWebEngineCore",
-    "PyQt6.QtWebEngineQuick",
-    "PyQt6.QtWebEngineWidgets",
     "PyQt6.QtWebSockets",
     "PyQt6.QtWebView",
 ]

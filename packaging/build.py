@@ -38,14 +38,6 @@ EXCLUDED_PYQT6_MODULES = [
     "PyQt6.QtMultimedia",
     "PyQt6.QtMultimediaWidgets",
     "PyQt6.QtNfc",
-    "PyQt6.QtPdf",
-    "PyQt6.QtPdfWidgets",
-    "PyQt6.QtPositioning",
-    "PyQt6.QtQml",
-    "PyQt6.QtQuick",
-    "PyQt6.QtQuick3D",
-    "PyQt6.QtQuickControls2",
-    "PyQt6.QtQuickWidgets",
     "PyQt6.QtRemoteObjects",
     "PyQt6.QtSensors",
     "PyQt6.QtSerialBus",
@@ -56,11 +48,6 @@ EXCLUDED_PYQT6_MODULES = [
     # it explicitly to keep the dependency surface clean.
     "PyQt6.QtSql",
     "PyQt6.QtTextToSpeech",
-    "PyQt6.QtWebChannel",
-    "PyQt6.QtWebEngine",
-    "PyQt6.QtWebEngineCore",
-    "PyQt6.QtWebEngineQuick",
-    "PyQt6.QtWebEngineWidgets",
     "PyQt6.QtWebSockets",
     "PyQt6.QtWebView",
 ]
@@ -136,6 +123,14 @@ def main() -> int:
         "PyQt6",
         "--collect-all",
         "PIL",
+        # QtWebEngine ships its own resources/locales/Chromium process binary;
+        # collect-all picks them up so the web view actually has assets to load.
+        "--collect-all",
+        "PyQt6.QtWebEngineCore",
+        "--collect-all",
+        "PyQt6.QtWebEngineWidgets",
+        "--collect-all",
+        "PyQt6.QtWebChannel",
         "--add-data",
         f"{ROOT / 'magpie' / 'resources'}{separator}magpie/resources",
     ]
