@@ -11,12 +11,29 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
 
 
-TARGET_NAMES = {
-    "windows-x64": "Magpie-1.0.0-windows-x64",
-    "macos-x64": "Magpie-1.0.0-macos-x64",
-    "macos-arm64": "Magpie-1.0.0-macos-arm64",
-    "linux-x86_64": "Magpie-1.0.0-linux-x86_64",
-}
+# Supported PyInstaller targets. The artifact filename is derived at runtime
+# as ``Magpie-<version>-<target>``; the version comes from the MAGPIE_VERSION
+# env var (set by the release workflow from the pushed tag) when available,
+# otherwise from ``magpie.__version__``.
+TARGETS: tuple[str, ...] = (
+    "windows-x64",
+    "macos-x64",
+    "macos-arm64",
+    "linux-x86_64",
+)
+
+
+def _resolve_version() -> str:
+    override = os.environ.get("MAGPIE_VERSION", "").strip()
+    if override:
+        # Strip a leading "v" so tags like v1.2.3 yield 1.2.3.
+        return override.lstrip("v")
+    sys.path.insert(0, str(ROOT))
+    try:
+        from magpie import __version__
+        return __version__
+    finally:
+        sys.path.pop(0)
 
 # Heavy PyQt6 sub-packages we never import. Excluding them keeps the
 # onefile build small AND prevents PyInstaller from following Qt plugin
@@ -94,7 +111,7 @@ def _sanitized_env() -> dict[str, str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Magpie with PyInstaller")
-    parser.add_argument("--target", required=True, choices=sorted(TARGET_NAMES))
+    parser.add_argument("--target", required=True, choices=sorted(TARGETS))
     parser.add_argument(
         "--console",
         action="store_true",
@@ -105,7 +122,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    name = TARGET_NAMES[args.target]
+    version = _resolve_version()
+    name = f"Magpie-{version}-{args.target}"
+    print(f"[build] target={args.target} version={version} → {name}")
     entrypoint = ROOT / "magpie" / "ImageClassifierQt.py"
     icon_path = ROOT / "packaging" / "app.ico"
     separator = ";" if sys.platform.startswith("win") else ":"
