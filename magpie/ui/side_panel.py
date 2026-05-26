@@ -8,7 +8,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -80,16 +79,6 @@ QListWidget#recentList {
 QListWidget#recentList::item {
     padding: 3px 4px;
 }
-QPushButton#undoButton {
-    background: #ff5722;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    padding: 8px;
-    font-weight: 600;
-}
-QPushButton#undoButton:hover { background: #f4511e; }
-QPushButton#undoButton:disabled { background: #d1d5db; color: #ffffff; }
 """
 
 
@@ -166,9 +155,13 @@ class CategoryRow(QFrame):
 
 
 class SidePanel(QWidget):
-    """Side panel with clickable categories, recent operations and undo."""
+    """Side panel with clickable categories and a recent operations list.
 
-    undoRequested = pyqtSignal()
+    The undo button used to live at the bottom of this panel; it has moved
+    to a footer row in the main window so its bottom can align with the
+    image-display area's bottom.
+    """
+
     classifyRequested = pyqtSignal(object)  # Category
 
     RECENT_LIMIT = 12
@@ -225,13 +218,9 @@ class SidePanel(QWidget):
         self.recent_list.setMaximumHeight(200)
         self.recent_list.setUniformItemSizes(True)
         layout.addWidget(self.recent_list)
-
-        self.undo_button = QPushButton("撤销 Ctrl+Z")
-        self.undo_button.setObjectName("undoButton")
-        self.undo_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.undo_button.clicked.connect(self.undoRequested.emit)
-        self.undo_button.setEnabled(False)
-        layout.addWidget(self.undo_button)
+        # The undo button used to live here; it has moved to the bottom of the
+        # main window so its bottom aligns with the image-display area's
+        # bottom. Main window owns it now.
 
     # ---- Categories ----
 
@@ -278,9 +267,6 @@ class SidePanel(QWidget):
             row.clicked.connect(self.classifyRequested.emit)
             self.category_layout.insertWidget(self.category_layout.count() - 1, row)
             self._rows.append(row)
-
-    def set_undo_enabled(self, enabled: bool) -> None:
-        self.undo_button.setEnabled(enabled)
 
     # ---- Recent operations ----
 

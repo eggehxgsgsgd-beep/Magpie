@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -132,18 +133,21 @@ class MainWindow(QMainWindow):
         else:
             self._show_empty_state()
 
+    # Right-column (side panel) width — also used to size the footer's
+    # right-side undo button so the visual columns line up.
+    _RIGHT_COLUMN_WIDTH = 260
+
     def _create_ui(self) -> None:
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setSpacing(12)
-        main_layout.setContentsMargins(12, 12, 12, 12)
+        root = QVBoxLayout(central_widget)
+        root.setSpacing(8)
+        root.setContentsMargins(12, 12, 12, 12)
 
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setSpacing(6)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        # ---- Top row: image area + side panel ----
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
 
         self.image_view = ImageView()
         self.image_view.folderDropped.connect(self._handle_dropped_path)
@@ -152,19 +156,32 @@ class MainWindow(QMainWindow):
         self.image_view.nextRequested.connect(self.next_image)
         self.image_view.autoplayRequested.connect(lambda: self.autoplay_action.trigger())
         self.image_view.contextMenuRequested.connect(self._show_image_context_menu)
-        left_layout.addWidget(self.image_view, stretch=1)
+        top_row.addWidget(self.image_view, stretch=1)
+
+        self.side_panel = SidePanel()
+        self.side_panel.classifyRequested.connect(self.classify_current_image)
+        top_row.addWidget(self.side_panel)
+
+        root.addLayout(top_row, stretch=1)
+
+        # ---- Footer row: image-name label (left) + undo button (right) ----
+        footer_row = QHBoxLayout()
+        footer_row.setSpacing(12)
 
         self.image_name_label = QLabel("")
         self.image_name_label.setObjectName("imageNameLabel")
         self.image_name_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        left_layout.addWidget(self.image_name_label)
+        footer_row.addWidget(self.image_name_label, stretch=1)
 
-        self.side_panel = SidePanel()
-        self.side_panel.undoRequested.connect(self.undo)
-        self.side_panel.classifyRequested.connect(self.classify_current_image)
+        self.undo_button = QPushButton("撤销 Ctrl+Z")
+        self.undo_button.setObjectName("undoButton")
+        self.undo_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.undo_button.setEnabled(False)
+        self.undo_button.setFixedWidth(self._RIGHT_COLUMN_WIDTH)
+        self.undo_button.clicked.connect(self.undo)
+        footer_row.addWidget(self.undo_button)
 
-        main_layout.addWidget(left_panel, stretch=7)
-        main_layout.addWidget(self.side_panel)
+        root.addLayout(footer_row)
 
         self.image_view.setFocus()
         self._refresh_side_panel()
@@ -1003,8 +1020,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "project_settings_action"):
             self.project_settings_action.setEnabled(bool(self.state.image_folder))
         self.undo_action.setEnabled(self.history.undo_count > 0)
-        if hasattr(self, "side_panel"):
-            self.side_panel.set_undo_enabled(self.history.undo_count > 0)
+        if hasattr(self, "undo_button"):
+            self.undo_button.setEnabled(self.history.undo_count > 0)
         self.mode_action.setText("移动模式" if self.operation_kind == OperationKind.MOVE else "复制模式")
 
     def closeEvent(self, event) -> None:

@@ -78,6 +78,17 @@ QProgressBar#statusProgressBar::chunk {
     background: #3b82f6;
     border-radius: 2px;
 }
+
+QPushButton#undoButton {
+    background: #ff5722;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-weight: 600;
+}
+QPushButton#undoButton:hover { background: #f4511e; }
+QPushButton#undoButton:disabled { background: #d1d5db; color: #ffffff; }
 """
 
 
