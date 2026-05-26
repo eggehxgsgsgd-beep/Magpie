@@ -1,5 +1,6 @@
 ﻿from .bbox import draw_bboxes_on_pixmap, label_path_for_image, load_class_names, load_yolo_labels
 from .classifier import (
+    TargetModifiedError,
     classify_image,
     ensure_category_folders,
     resolve_target_path,
@@ -12,6 +13,7 @@ from .image_loader import CustomSortError, compile_custom_sort_key, list_image_f
 __all__ = [
     "CustomSortError",
     "OperationHistory",
+    "TargetModifiedError",
     "classify_image",
     "compile_custom_sort_key",
     "draw_bboxes_on_pixmap",

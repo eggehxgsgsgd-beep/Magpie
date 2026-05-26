@@ -26,6 +26,7 @@ from magpie.config import (
     ClassificationRecord,
     Preferences,
     ProjectPathError,
+    image_key,
     resolve_active_categories,
     resolve_active_sort,
     resolve_class_names,
@@ -35,6 +36,7 @@ from magpie.config import (
 from magpie.core import (
     CustomSortError,
     OperationHistory,
+    TargetModifiedError,
     classify_image,
     draw_bboxes_on_pixmap,
     ensure_category_folders,
@@ -47,6 +49,7 @@ from magpie.core import (
 )
 from magpie.models import BUILTIN_SORT_PRESETS, Category, OperationKind, SortPreset
 from magpie.ui.conflict_dialog import ConflictDialog
+from magpie.ui.debounced_saver import DebouncedSaver
 from magpie.ui.image_view import ImageView
 from magpie.ui.preferences_dialog import PreferencesDialog
 from magpie.ui.project_settings_dialog import ProjectSettingsDialog
@@ -114,6 +117,12 @@ class MainWindow(QMainWindow):
         self.active_output_dir: Path | None = None
         self.active_labels_dir: Path | None = None
         self.active_categories: list[Category] = resolve_active_categories(self.preferences)
+
+        # Coalesce disk writes so high-frequency keyboard flow doesn't fsync
+        # on every keystroke. Each saver has a 500 ms idle window; closeEvent
+        # flushes both.
+        self._record_saver: DebouncedSaver | None = None
+        self._state_saver = DebouncedSaver(self.state.save, interval_ms=500, parent=self)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_image)
@@ -540,7 +549,14 @@ class MainWindow(QMainWindow):
 
         self.state.image_folder = folder_key
         self.state.add_recent_folder(folder_key)
+        # Flush any pending writes from the previous record before swapping.
+        if self._record_saver is not None:
+            self._record_saver.flush()
         self.classification_record = ClassificationRecord.load(folder_path)
+        self._record_saver = DebouncedSaver(
+            self.classification_record.save, interval_ms=500, parent=self,
+        )
+        self.classification_record.set_dirty_callback(self._record_saver.request)
         self._refresh_recent_menu()
 
         # Resolve effective project paths (output / labels / classes).
@@ -623,11 +639,14 @@ class MainWindow(QMainWindow):
             return
 
         image_path = self.image_files[self.current_index]
+        source_folder = self.state.image_folder
         try:
             pixmap = load_pixmap(image_path)
             if self.show_bbox_action.isChecked() and self.active_labels_dir:
                 boxes = load_yolo_labels(
-                    label_path_for_image(self.active_labels_dir, image_path)
+                    label_path_for_image(
+                        self.active_labels_dir, image_path, source_folder,
+                    )
                 )
                 pixmap = draw_bboxes_on_pixmap(
                     pixmap, boxes, self.active_categories, self.class_names
@@ -637,9 +656,13 @@ class MainWindow(QMainWindow):
             return
 
         self.image_view.set_pixmap(pixmap, fit=fit)
-        labels = self.classification_record.labels_for(image_path.name) if self.classification_record else []
+        record_key = image_key(image_path, source_folder) if source_folder else image_path.name
+        labels = self.classification_record.labels_for(record_key) if self.classification_record else []
         self.image_view.set_badge(labels if self.preferences.show_classified_marker else [])
         self.state.current_index = self.current_index
+        # Persist navigation progress so a crash / kill doesn't drop us back
+        # to index 0. Debounced — actual writes happen at most every 500 ms.
+        self._state_saver.request()
         self._update_status()
         self._refresh_side_panel()
         self._update_action_states()
@@ -793,26 +816,36 @@ class MainWindow(QMainWindow):
 
         self.history.push(operation)
         if self.classification_record:
-            self.classification_record.add(image_path.name, category.folder_name)
+            self.classification_record.add(
+                image_key(image_path, self.state.image_folder),
+                category.folder_name,
+            )
         self.side_panel.add_recent_operation(operation, category)
         self._refresh_side_panel()
         self.status.showMessage(f"已分类到 {category.folder_name}", 2000)
 
         if self.operation_kind == OperationKind.MOVE:
+            # After popping at current_index, the slot already points at what
+            # *was* the next image (list shrank under us). Don't call
+            # next_image() — that would skip a row.
             self.image_files.pop(self.current_index)
-            if self.current_index >= len(self.image_files):
-                self.current_index = max(0, len(self.image_files) - 1)
             if not self.image_files:
                 self._show_empty_state("图片列表已处理完成。")
                 return
-
-        self.next_image()
+            if self.current_index >= len(self.image_files):
+                self.current_index = len(self.image_files) - 1
+            self._load_current_image()
+        else:
+            self.next_image()
         self._restart_autoplay_tick()
         self._update_action_states()
 
     def _resolve_conflict_target(self, image_path: Path, category: Category) -> tuple[Path | None, str]:
         output_dir = self.active_output_dir or Path(".")
-        target = output_dir / category.folder_name / image_path.name
+        # Mirror the source subdirectory layout under the category folder so
+        # recursive scans don't collide on basename.
+        rel = Path(image_key(image_path, self.state.image_folder)) if self.state.image_folder else Path(image_path.name)
+        target = output_dir / category.folder_name / rel
         if not target.exists():
             return target, "rename"
 
@@ -838,23 +871,47 @@ class MainWindow(QMainWindow):
         operation = self.history.pop_undo()
         if operation is None:
             return
+
         try:
-            undo_operation(operation)
-            if operation.kind == OperationKind.MOVE and operation.source_path not in self.image_files:
-                self.image_files.insert(min(operation.index, len(self.image_files)), operation.source_path)
-            if self.classification_record:
-                self.classification_record.remove(operation.source_path.name, operation.category_folder)
-            self.current_index = min(operation.index, max(len(self.image_files) - 1, 0))
-            self.side_panel.remove_recent_operation(operation)
-            self._load_current_image()
-            self._refresh_side_panel()
-            if self.preferences.undo_prompt:
-                QMessageBox.information(self, "撤销成功", f"已撤销 {operation.source_path.name}")
-            else:
-                self.status.showMessage("已撤销", 2000)
-        except Exception as exc:
+            self._perform_undo(operation, force=False)
+        except TargetModifiedError as exc:
+            reply = QMessageBox.warning(
+                self,
+                "目标文件已被外部修改",
+                f"<b>{exc.target_path}</b> 与源文件的大小/修改时间不一致——"
+                "可能是你在外部编辑过这份副本。\n\n仍要撤销（会删除这份副本）吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                # Re-push so user doesn't lose the undo entry.
+                self.history.push(operation)
+                self.status.showMessage("已取消撤销", 2000)
+                self._update_action_states()
+                return
+            try:
+                self._perform_undo(operation, force=True)
+            except Exception as exc2:  # noqa: BLE001
+                QMessageBox.warning(self, "撤销失败", str(exc2))
+        except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "撤销失败", str(exc))
         self._update_action_states()
+
+    def _perform_undo(self, operation, force: bool) -> None:
+        undo_operation(operation, force=force)
+        if operation.kind == OperationKind.MOVE and operation.source_path not in self.image_files:
+            self.image_files.insert(min(operation.index, len(self.image_files)), operation.source_path)
+        if self.classification_record:
+            key = image_key(operation.source_path, self.state.image_folder) if self.state.image_folder else operation.source_path.name
+            self.classification_record.remove(key, operation.category_folder)
+        self.current_index = min(operation.index, max(len(self.image_files) - 1, 0))
+        self.side_panel.remove_recent_operation(operation)
+        self._load_current_image()
+        self._refresh_side_panel()
+        if self.preferences.undo_prompt:
+            QMessageBox.information(self, "撤销成功", f"已撤销 {operation.source_path.name}")
+        else:
+            self.status.showMessage("已撤销", 2000)
 
     def open_preferences(self) -> None:
         prev_sort_id = self.active_sort_preset.id
@@ -978,26 +1035,34 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, folder=folder: self.open_image_folder(folder))
 
     def _refresh_side_panel(self) -> None:
-        current_name = (
-            self.image_files[self.current_index].name
-            if self.image_files and 0 <= self.current_index < len(self.image_files)
-            else ""
-        )
+        if self.image_files and 0 <= self.current_index < len(self.image_files):
+            current_path = self.image_files[self.current_index]
+            current_key = (
+                image_key(current_path, self.state.image_folder)
+                if self.state.image_folder
+                else current_path.name
+            )
+        else:
+            current_key = ""
         self.side_panel.refresh(
             self.active_categories,
             str(self.active_output_dir or ""),
             self.classification_record,
-            current_name,
+            current_key,
         )
 
     def _update_status(self, message: str | None = None) -> None:
         if not self.image_files:
             return
         image_path = self.image_files[self.current_index]
-        labels = self.classification_record.labels_for(image_path.name) if self.classification_record else []
+        record_key = image_key(image_path, self.state.image_folder) if self.state.image_folder else image_path.name
+        labels = self.classification_record.labels_for(record_key) if self.classification_record else []
         total = len(self.image_files)
         classified_suffix = f" · 已标 {', '.join(labels)}" if labels else ""
-        self.image_name_label.setText(f"{image_path.name}{classified_suffix}")
+        # When recursive scanning, show the relative subpath so users can tell
+        # `subA/0001.jpg` from `subB/0001.jpg`.
+        display_name = record_key if "/" in record_key else image_path.name
+        self.image_name_label.setText(f"{display_name}{classified_suffix}")
         self.index_label.setText(f"{self.current_index + 1} / {total}")
         self.path_label.setText(str(image_path.parent))
         if message:
@@ -1025,6 +1090,11 @@ class MainWindow(QMainWindow):
         self.mode_action.setText("移动模式" if self.operation_kind == OperationKind.MOVE else "复制模式")
 
     def closeEvent(self, event) -> None:
+        # Flush any pending debounced record save before final state save —
+        # the queue may have unwritten classify/undo events from the last
+        # ~500ms of keypresses.
+        if self._record_saver is not None:
+            self._record_saver.flush()
         self.state.current_index = self.current_index
         self.state.geometry_hex = bytes(self.saveGeometry().toHex()).decode("ascii")
         self.state.window_state_hex = bytes(self.saveState().toHex()).decode("ascii")
@@ -1037,6 +1107,9 @@ class MainWindow(QMainWindow):
                 recursive_scan=self.active_recursive_scan,
                 current_index=self.current_index,
             )
+        # Cancel any in-flight debounce timer and write state right now (close
+        # is the one place we want a synchronous, guaranteed write).
+        self._state_saver.flush()
         self.state.save()
         self.preferences.save()
         super().closeEvent(event)

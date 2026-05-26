@@ -62,6 +62,11 @@ def classify_image(
     if target_path is None:
         return None
 
+    # Caller may have computed a target inside a subdirectory mirror (when
+    # the source was found via a recursive scan). Make sure intermediate
+    # directories exist before move/copy — shutil doesn't create them.
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
     if kind == OperationKind.MOVE:
         shutil.move(str(source_path), str(target_path))
     else:
@@ -76,10 +81,37 @@ def classify_image(
     )
 
 
-def undo_operation(operation: Operation) -> None:
+class TargetModifiedError(Exception):
+    """Raised by ``undo_operation`` when the COPY target has diverged from
+    its source on disk (mtime/size mismatch). Caller should ask the user
+    whether to delete it anyway and retry with ``force=True``."""
+
+    def __init__(self, target_path: Path) -> None:
+        super().__init__(str(target_path))
+        self.target_path = target_path
+
+
+# Treat target as "modified" if size differs at all, or mtime differs by
+# more than this many seconds. mtime tolerance covers FAT32 / SMB clock skew.
+_MTIME_TOLERANCE_S = 2.0
+
+
+def undo_operation(operation: Operation, *, force: bool = False) -> None:
     if operation.kind == OperationKind.MOVE:
         if operation.target_path.exists():
             operation.source_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(operation.target_path), str(operation.source_path))
-    elif operation.target_path.exists():
-        operation.target_path.unlink()
+        return
+
+    # COPY undo = delete the copy at target_path. But the user might have
+    # edited that copy externally; deleting would silently destroy their
+    # work. Compare against the (still-existing) source to detect that.
+    if not operation.target_path.exists():
+        return
+    if not force and operation.source_path.exists():
+        src_stat = operation.source_path.stat()
+        tgt_stat = operation.target_path.stat()
+        if src_stat.st_size != tgt_stat.st_size or \
+                abs(src_stat.st_mtime - tgt_stat.st_mtime) > _MTIME_TOLERANCE_S:
+            raise TargetModifiedError(operation.target_path)
+    operation.target_path.unlink()

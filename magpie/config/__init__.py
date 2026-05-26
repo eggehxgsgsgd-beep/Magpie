@@ -1,4 +1,4 @@
-from .classifications import ClassificationRecord, record_path_for_source
+from .classifications import ClassificationRecord, image_key, record_path_for_source
 from .paths import app_data_dir, classifications_dir, log_dir, preferences_path, state_path
 from .preferences import (
     DEFAULT_EXTENSIONS,
@@ -25,6 +25,7 @@ __all__ = [
     "ProjectPathError",
     "app_data_dir",
     "classifications_dir",
+    "image_key",
     "log_dir",
     "preferences_path",
     "record_path_for_source",

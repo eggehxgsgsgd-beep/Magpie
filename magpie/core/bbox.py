@@ -25,8 +25,27 @@ class BBox:
         return QRectF(x, y, width, height)
 
 
-def label_path_for_image(labels_dir: str | Path, image_path: str | Path) -> Path:
-    return Path(labels_dir) / Path(image_path).with_suffix(".txt").name
+def label_path_for_image(
+    labels_dir: str | Path,
+    image_path: str | Path,
+    source_folder: str | Path | None = None,
+) -> Path:
+    """Locate the YOLO ``.txt`` label file for ``image_path``.
+
+    When ``source_folder`` is given, the relative position of the image is
+    preserved under ``labels_dir`` (so ``src/subA/0001.jpg`` →
+    ``labels_dir/subA/0001.txt``). Without it we fall back to the legacy
+    flat lookup (``labels_dir/<basename>.txt``).
+    """
+    image_path = Path(image_path)
+    label_name = image_path.with_suffix(".txt").name
+    if source_folder is None:
+        return Path(labels_dir) / label_name
+    try:
+        rel = image_path.relative_to(Path(source_folder))
+    except ValueError:
+        return Path(labels_dir) / label_name
+    return Path(labels_dir) / rel.with_suffix(".txt")
 
 
 def load_yolo_labels(label_path: str | Path) -> list[BBox]:
