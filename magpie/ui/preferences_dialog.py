@@ -1,26 +1,31 @@
+"""Preferences dialog: 8 tabs centered on named presets.
+
+The four preset-driven tabs (类别 / 标签 / classes / 排序) share an identical
+visual structure: a single ``PresetListView`` + a "新建" button below it.
+Clicking 编辑/复制/删除 on a row pops the corresponding editor dialog. The
+排序 tab adds a 升序/降序 radio underneath; that is the only structural
+exception.
+
+The "输出" / 显示 / 行为 / 导入/导出 tabs are standalone forms.
+"""
+
 from __future__ import annotations
 
 import json
 import os
-import string
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QButtonGroup,
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -29,18 +34,14 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QSlider,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from magpie.config import DEFAULT_EXTENSIONS, DEFAULT_PALETTE, Preferences
+from magpie.config import DEFAULT_EXTENSIONS, Preferences
 from magpie.core import CustomSortError, compile_custom_sort_key
-from magpie.core.classifier import validate_folder_name
 from magpie.models import (
-    Category,
     CategoryPreset,
     ClassesPreset,
     LabelsPreset,
@@ -53,10 +54,6 @@ from magpie.ui.preset_editors import (
     LabelsPresetEditor,
 )
 from magpie.ui.widgets import PresetItem, PresetListView
-
-
-RESERVED_SHORTCUTS = {"f", "0", "b", "+", "-"}
-VISIBLE_SINGLE_KEYS = set(string.ascii_letters + string.digits + "-=[];',./`\\")
 
 
 # ---------------------------------------------------------------------------
@@ -194,17 +191,8 @@ class PreferencesDialog(QDialog):
     def __init__(self, preferences: Preferences, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("首选项")
-        self.resize(880, 600)
+        self.resize(820, 600)
         self.preferences = Preferences.from_dict(preferences.to_dict())
-
-        # Per-tab transient state.
-        self._active_category_preset_id = self.preferences.active_category_preset
-        if not any(p.id == self._active_category_preset_id for p in self.preferences.category_presets):
-            self._active_category_preset_id = (
-                self.preferences.category_presets[0].id
-                if self.preferences.category_presets
-                else ""
-            )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -217,8 +205,10 @@ class PreferencesDialog(QDialog):
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._create_categories_tab(), "类别")
-        self.tabs.addTab(self._create_folders_tab(), "目录")
+        self.tabs.addTab(self._create_labels_tab(), "标签")
+        self.tabs.addTab(self._create_classes_tab(), "classes")
         self.tabs.addTab(self._create_sort_tab(), "排序")
+        self.tabs.addTab(self._create_output_tab(), "输出")
         self.tabs.addTab(self._create_display_tab(), "显示")
         self.tabs.addTab(self._create_behavior_tab(), "行为")
         self.tabs.addTab(self._create_import_export_tab(), "导入/导出")
@@ -238,7 +228,25 @@ class PreferencesDialog(QDialog):
         layout.addWidget(buttons)
 
     # ===================================================================
-    # 类别 tab
+    # Helpers shared across preset tabs
+    # ===================================================================
+
+    @staticmethod
+    def _make_hint(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setStyleSheet("color: #6b7280; font-size: 11px;")
+        label.setWordWrap(True)
+        return label
+
+    @staticmethod
+    def _set_combo_by_data(combo: QComboBox, value) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    # ===================================================================
+    # 类别 tab — PresetListView only
     # ===================================================================
 
     def _create_categories_tab(self) -> QWidget:
@@ -247,62 +255,20 @@ class PreferencesDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        layout.addWidget(QLabel("<b>类别方案</b>"))
         layout.addWidget(self._make_hint(
-            "管理多套类别。选中某个方案，下面的表格就编辑该方案的类别。"
+            "管理多套类别方案。点击「编辑」修改类别内容；"
+            "在列表中选中一项即把它设为当前生效方案。"
         ))
 
-        self.category_preset_view = PresetListView(new_button_text="+ 新建方案…")
-        self.category_preset_view.setMinimumHeight(160)
-        self.category_preset_view.selectionChanged.connect(self._on_category_preset_selected)
+        self.category_preset_view = PresetListView(new_button_text="+ 新建类别方案…")
+        self.category_preset_view.selectionChanged.connect(self._on_category_selection_changed)
         self.category_preset_view.requestNew.connect(self._on_category_preset_new)
-        self.category_preset_view.requestEdit.connect(self._on_category_preset_rename)
+        self.category_preset_view.requestEdit.connect(self._on_category_preset_edit)
         self.category_preset_view.requestDuplicate.connect(self._on_category_preset_duplicate)
         self.category_preset_view.requestDelete.connect(self._on_category_preset_delete)
         layout.addWidget(self.category_preset_view, stretch=1)
 
-        layout.addWidget(QLabel(""))
-        self.category_table_title = QLabel("")
-        self.category_table_title.setStyleSheet("font-weight: 600; color: #1f2937;")
-        layout.addWidget(self.category_table_title)
-        layout.addWidget(self._make_hint(
-            "可拖动整行调整顺序。双击颜色列可选择类别颜色。"
-        ))
-
-        self.category_table = QTableWidget(0, 4)
-        self.category_table.setHorizontalHeaderLabels(
-            ["快捷键", "类别文件夹名", "显示名称", "颜色"]
-        )
-        header = self.category_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.category_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.category_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.category_table.setDragEnabled(True)
-        self.category_table.setAcceptDrops(True)
-        self.category_table.viewport().setAcceptDrops(True)
-        self.category_table.setDragDropOverwriteMode(False)
-        self.category_table.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.category_table.verticalHeader().setVisible(True)
-        self.category_table.verticalHeader().setSectionsMovable(False)
-        self.category_table.itemChanged.connect(self._on_category_item_changed)
-        self.category_table.cellDoubleClicked.connect(self._on_category_cell_double_clicked)
-        layout.addWidget(self.category_table, stretch=2)
-
-        row = QHBoxLayout()
-        add_button = QPushButton("添加类别")
-        delete_button = QPushButton("删除选中类别")
-        add_button.clicked.connect(self._add_category_row)
-        delete_button.clicked.connect(self._delete_selected_category)
-        row.addWidget(add_button)
-        row.addWidget(delete_button)
-        row.addStretch()
-        layout.addLayout(row)
-
         self._refresh_category_preset_view()
-        self._populate_category_table_from_active_preset()
         return tab
 
     def _refresh_category_preset_view(self) -> None:
@@ -312,34 +278,13 @@ class PreferencesDialog(QDialog):
                 title=p.name,
                 subtitle=f"{len(p.categories)} 类别",
                 icon="📁",
-                builtin=False,
             )
             for p in self.preferences.category_presets
         ]
-        self.category_preset_view.set_presets(items, self._active_category_preset_id)
+        self.category_preset_view.set_presets(items, self.preferences.active_category_preset)
 
-    def _populate_category_table_from_active_preset(self) -> None:
-        preset = self._find_category_preset(self._active_category_preset_id)
-        self.category_table_title.setText(
-            f"编辑方案：「{preset.name if preset else '（无）'}」"
-        )
-        self.category_table.blockSignals(True)
-        try:
-            self.category_table.setRowCount(0)
-            if preset:
-                for category in preset.categories:
-                    self._add_category_row(category, mark_clean=True)
-        finally:
-            self.category_table.blockSignals(False)
-        self._highlight_shortcut_conflicts()
-
-    def _on_category_preset_selected(self, preset_id: str) -> None:
-        # Persist the current table edits back to the old active preset first.
-        self._sync_table_to_active_preset()
-        self._active_category_preset_id = preset_id
-        self._populate_category_table_from_active_preset()
-        # Update count subtitles to reflect any edits.
-        self._refresh_category_preset_view()
+    def _on_category_selection_changed(self, preset_id: str) -> None:
+        self.preferences.active_category_preset = preset_id
 
     def _on_category_preset_new(self) -> None:
         editor = CategoryPresetEditor(parent=self)
@@ -347,46 +292,41 @@ class PreferencesDialog(QDialog):
             preset = editor.result_preset()
             if preset is None:
                 return
-            self._sync_table_to_active_preset()
             self.preferences.category_presets.append(preset)
-            self._active_category_preset_id = preset.id
+            self.preferences.active_category_preset = preset.id
             self._refresh_category_preset_view()
-            self._populate_category_table_from_active_preset()
 
-    def _on_category_preset_rename(self, preset_id: str) -> None:
-        preset = self._find_category_preset(preset_id)
+    def _on_category_preset_edit(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.category_presets, preset_id)
         if preset is None:
             return
         editor = CategoryPresetEditor(preset=preset, parent=self)
         if editor.exec():
-            result = editor.result_preset()
-            if result is None:
+            updated = editor.result_preset()
+            if updated is None:
                 return
-            preset.name = result.name
+            preset.name = updated.name
+            preset.categories = list(updated.categories)
             self._refresh_category_preset_view()
-            if preset.id == self._active_category_preset_id:
-                self.category_table_title.setText(f"编辑方案：「{preset.name}」")
 
     def _on_category_preset_duplicate(self, preset_id: str) -> None:
-        original = self._find_category_preset(preset_id)
+        original = self._find_preset(self.preferences.category_presets, preset_id)
         if original is None:
             return
-        self._sync_table_to_active_preset()
+        from magpie.models import Category as CategoryModel
         clone = CategoryPreset(
             id=CategoryPreset.new_id(),
             name=f"{original.name} 副本",
-            categories=[Category(**c.to_dict()) for c in original.categories],
+            categories=[CategoryModel(**c.to_dict()) for c in original.categories],
         )
         self.preferences.category_presets.append(clone)
-        self._active_category_preset_id = clone.id
         self._refresh_category_preset_view()
-        self._populate_category_table_from_active_preset()
 
     def _on_category_preset_delete(self, preset_id: str) -> None:
         if len(self.preferences.category_presets) <= 1:
             QMessageBox.information(self, "无法删除", "至少需要保留一个类别方案。")
             return
-        preset = self._find_category_preset(preset_id)
+        preset = self._find_preset(self.preferences.category_presets, preset_id)
         if preset is None:
             return
         if QMessageBox.question(
@@ -397,260 +337,345 @@ class PreferencesDialog(QDialog):
         self.preferences.category_presets = [
             p for p in self.preferences.category_presets if p.id != preset_id
         ]
-        if self._active_category_preset_id == preset_id:
-            self._active_category_preset_id = self.preferences.category_presets[0].id
+        if self.preferences.active_category_preset == preset_id:
+            self.preferences.active_category_preset = self.preferences.category_presets[0].id
         self._refresh_category_preset_view()
-        self._populate_category_table_from_active_preset()
-
-    def _find_category_preset(self, preset_id: str) -> CategoryPreset | None:
-        for preset in self.preferences.category_presets:
-            if preset.id == preset_id:
-                return preset
-        return None
-
-    def _sync_table_to_active_preset(self) -> None:
-        preset = self._find_category_preset(self._active_category_preset_id)
-        if preset is None:
-            return
-        preset.categories = self._collect_categories_from_table()
-
-    # ---- Category table helpers (preserved from old impl) ----
-
-    def _add_category_row(self, category: Category | None = None, mark_clean: bool = False) -> None:
-        self.category_table.blockSignals(True)
-        try:
-            row = self.category_table.rowCount()
-            self.category_table.insertRow(row)
-            category = category or Category(
-                key=str(row + 1),
-                folder_name=f"class_{row + 1}",
-                display_name=f"class_{row + 1}",
-                color=DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)],
-            )
-            display_value = category.display_name or category.folder_name
-            synced = (
-                not category.display_name
-                or category.display_name == category.folder_name
-            )
-            key_item = QTableWidgetItem(category.key)
-            folder_item = QTableWidgetItem(category.folder_name)
-            display_item = QTableWidgetItem(display_value)
-            display_item.setData(Qt.ItemDataRole.UserRole, bool(synced))
-            self.category_table.setItem(row, 0, key_item)
-            self.category_table.setItem(row, 1, folder_item)
-            self.category_table.setItem(row, 2, display_item)
-            self._set_color_cell(row, category.color or DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)])
-        finally:
-            self.category_table.blockSignals(False)
-        self._highlight_shortcut_conflicts()
-        if not mark_clean:
-            # Mutated: refresh the count subtitle on the preset row.
-            self._sync_table_to_active_preset()
-            self._refresh_category_preset_view()
-
-    def _set_color_cell(self, row: int, color_hex: str) -> None:
-        color = QColor(color_hex)
-        if not color.isValid():
-            color = QColor(DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)])
-        item = QTableWidgetItem(color.name())
-        item.setBackground(QBrush(color))
-        item.setForeground(QBrush(QColor("#111827" if color.lightnessF() > 0.6 else "#ffffff")))
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        item.setToolTip("双击修改颜色")
-        self.category_table.setItem(row, 3, item)
-
-    def _on_category_cell_double_clicked(self, row: int, column: int) -> None:
-        if column != 3:
-            return
-        item = self.category_table.item(row, column)
-        current = item.text() if item else DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)]
-        chosen = QColorDialog.getColor(QColor(current), self, "选择类别颜色")
-        if chosen.isValid():
-            self.category_table.blockSignals(True)
-            try:
-                self._set_color_cell(row, chosen.name())
-            finally:
-                self.category_table.blockSignals(False)
-            self._sync_table_to_active_preset()
-
-    def _on_category_item_changed(self, item: QTableWidgetItem) -> None:
-        column = item.column()
-        if column == 0:
-            self._highlight_shortcut_conflicts()
-        elif column == 1:
-            display_item = self.category_table.item(item.row(), 2)
-            if display_item is None:
-                return
-            synced_flag = display_item.data(Qt.ItemDataRole.UserRole)
-            synced = bool(synced_flag) if synced_flag is not None else True
-            if synced or not display_item.text().strip():
-                self.category_table.blockSignals(True)
-                try:
-                    display_item.setText(item.text())
-                    display_item.setData(Qt.ItemDataRole.UserRole, True)
-                finally:
-                    self.category_table.blockSignals(False)
-        elif column == 2:
-            folder_item = self.category_table.item(item.row(), 1)
-            same_as_folder = bool(folder_item) and folder_item.text() == item.text()
-            item.setData(Qt.ItemDataRole.UserRole, same_as_folder)
-        self._sync_table_to_active_preset()
-
-    def _highlight_shortcut_conflicts(self) -> None:
-        seen: dict[str, list[int]] = {}
-        for row in range(self.category_table.rowCount()):
-            item = self.category_table.item(row, 0)
-            if not item:
-                continue
-            seen.setdefault(item.text().strip(), []).append(row)
-        for value, rows in seen.items():
-            conflict = len(rows) > 1 and value != ""
-            for row in rows:
-                item = self.category_table.item(row, 0)
-                if not item:
-                    continue
-                if conflict:
-                    item.setBackground(QBrush(QColor("#fecaca")))
-                    item.setToolTip("快捷键与其他行重复")
-                else:
-                    item.setBackground(QBrush())
-                    item.setToolTip("")
-
-    def _delete_selected_category(self) -> None:
-        row = self.category_table.currentRow()
-        if row < 0:
-            return
-        if QMessageBox.question(self, "确认删除", "确定删除选中的类别吗？") == QMessageBox.StandardButton.Yes:
-            self.category_table.removeRow(row)
-            self._highlight_shortcut_conflicts()
-            self._sync_table_to_active_preset()
-            self._refresh_category_preset_view()
-
-    def _collect_categories_from_table(self) -> list[Category]:
-        categories: list[Category] = []
-        for row in range(self.category_table.rowCount()):
-            key = self._table_text(row, 0)
-            folder_name = self._table_text(row, 1)
-            display_name = self._table_text(row, 2) or folder_name
-            color_item = self.category_table.item(row, 3)
-            color = (
-                color_item.text().strip()
-                if color_item and color_item.text().strip()
-                else DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)]
-            )
-            categories.append(
-                Category(key=key, folder_name=folder_name, display_name=display_name, color=color)
-            )
-        return categories
-
-    def _table_text(self, row: int, column: int) -> str:
-        item = self.category_table.item(row, column)
-        return item.text().strip() if item else ""
-
-    def _validate_categories(self, categories: list[Category]) -> str | None:
-        seen_keys: set[str] = set()
-        seen_folders: set[str] = set()
-        for category in categories:
-            key = category.key
-            if len(key) != 1 or key not in VISIBLE_SINGLE_KEYS:
-                return f"快捷键 {key or '<空>'} 无效：仅支持单个可见字符"
-            if key.lower() in RESERVED_SHORTCUTS:
-                return f"快捷键 {key} 与系统快捷键冲突"
-            if key in seen_keys:
-                return f"快捷键 {key} 重复"
-            seen_keys.add(key)
-            error = validate_folder_name(category.folder_name)
-            if error:
-                return error
-            if category.folder_name in seen_folders:
-                return f"类别文件夹 {category.folder_name} 重复"
-            seen_folders.add(category.folder_name)
-        return None
 
     # ===================================================================
-    # 目录 tab — output template + labels presets + classes presets
+    # 标签 tab
     # ===================================================================
 
-    def _create_folders_tab(self) -> QWidget:
+    def _create_labels_tab(self) -> QWidget:
         tab = QWidget()
-        outer = QVBoxLayout(tab)
-        outer.setContentsMargins(14, 14, 14, 14)
-        outer.setSpacing(10)
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
 
-        outer.addWidget(self._make_hint(
-            "下面是全局默认；每个源目录可在 <b>分类 → 本目录设置</b> 单独覆盖。"
+        layout.addWidget(self._make_hint(
+            "管理标签目录方案。每个方案是一条路径（绝对或相对源目录）；"
+            "选中一项即作为打开新目录时的默认标签目录。每个目录都可以在"
+            "「分类 → 本目录设置」里单独覆盖。"
         ))
 
-        # Output template
-        outer.addWidget(QLabel("<b>输出目录模板</b>"))
-        self.output_template_edit = QLineEdit(self.preferences.output_dir_template)
-        self.output_template_edit.setPlaceholderText("{parent}/{name}_filtered")
-        self.output_template_edit.textChanged.connect(self._refresh_output_preview)
-        outer.addWidget(self.output_template_edit)
-        self.output_template_hint = QLabel(
-            "可用变量：<code>{folder}</code> <code>{name}</code> "
-            "<code>{parent}</code> <code>{stem}</code>"
-        )
-        self.output_template_hint.setTextFormat(Qt.TextFormat.RichText)
-        self.output_template_hint.setStyleSheet("color: #6b7280; font-size: 11px;")
-        outer.addWidget(self.output_template_hint)
-        self.output_template_preview = QLabel("")
-        self.output_template_preview.setStyleSheet("color: #6b7280; font-size: 11px;")
-        self.output_template_preview.setWordWrap(True)
-        outer.addWidget(self.output_template_preview)
-
-        # Labels presets
-        labels_group = QGroupBox("标签目录方案")
-        labels_layout = QVBoxLayout(labels_group)
-        labels_layout.setContentsMargins(10, 10, 10, 10)
-        labels_layout.setSpacing(6)
-        labels_layout.addWidget(self._make_hint(
-            "每个方案是一个路径（绝对或相对源目录）。选择哪个作为默认在「目录」tab 下方决定，"
-            "或在「本目录设置」里按项目覆盖。"
-        ))
         self.labels_preset_view = PresetListView(new_button_text="+ 新建标签方案…")
         self.labels_preset_view.selectionChanged.connect(self._on_labels_selection_changed)
         self.labels_preset_view.requestNew.connect(self._on_labels_preset_new)
         self.labels_preset_view.requestEdit.connect(self._on_labels_preset_edit)
         self.labels_preset_view.requestDuplicate.connect(self._on_labels_preset_duplicate)
         self.labels_preset_view.requestDelete.connect(self._on_labels_preset_delete)
-        labels_layout.addWidget(self.labels_preset_view)
-        outer.addWidget(labels_group)
+        layout.addWidget(self.labels_preset_view, stretch=1)
 
-        # Classes presets
-        classes_group = QGroupBox("classes.txt 方案（仅内联）")
-        classes_layout = QVBoxLayout(classes_group)
-        classes_layout.setContentsMargins(10, 10, 10, 10)
-        classes_layout.setSpacing(6)
-        classes_layout.addWidget(self._make_hint(
-            "每个方案是一份类别名列表（一行一个，从 classes.txt 复制粘贴）。"
-            "不读取磁盘文件，方案可在不同项目间复用。"
+        self._refresh_labels_preset_view()
+        return tab
+
+    def _current_default_labels_id(self) -> str:
+        sel = (self.preferences.default_labels_selection or "none").strip()
+        if sel.startswith("preset:"):
+            return sel.split(":", 1)[1]
+        return ""
+
+    def _refresh_labels_preset_view(self) -> None:
+        items = [
+            PresetItem(id=p.id, title=p.name, subtitle=p.path or "(空)", icon="📂")
+            for p in self.preferences.labels_presets
+        ]
+        self.labels_preset_view.set_presets(items, self._current_default_labels_id())
+
+    def _on_labels_selection_changed(self, preset_id: str) -> None:
+        self.preferences.default_labels_selection = f"preset:{preset_id}"
+
+    def _on_labels_preset_new(self) -> None:
+        editor = LabelsPresetEditor(preview_folder=self._preview_folder(), parent=self)
+        if editor.exec():
+            preset = editor.result_preset()
+            if preset is None:
+                return
+            self.preferences.labels_presets.append(preset)
+            self.preferences.default_labels_selection = f"preset:{preset.id}"
+            self._refresh_labels_preset_view()
+
+    def _on_labels_preset_edit(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.labels_presets, preset_id)
+        if preset is None:
+            return
+        editor = LabelsPresetEditor(preset=preset, preview_folder=self._preview_folder(), parent=self)
+        if editor.exec():
+            updated = editor.result_preset()
+            if updated is None:
+                return
+            preset.name = updated.name
+            preset.path = updated.path
+            self._refresh_labels_preset_view()
+
+    def _on_labels_preset_duplicate(self, preset_id: str) -> None:
+        original = self._find_preset(self.preferences.labels_presets, preset_id)
+        if original is None:
+            return
+        clone = LabelsPreset(
+            id=LabelsPreset.new_id(), name=f"{original.name} 副本", path=original.path
+        )
+        self.preferences.labels_presets.append(clone)
+        self._refresh_labels_preset_view()
+
+    def _on_labels_preset_delete(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.labels_presets, preset_id)
+        if preset is None:
+            return
+        if QMessageBox.question(self, "确认删除", f"确定删除方案「{preset.name}」？") != QMessageBox.StandardButton.Yes:
+            return
+        self.preferences.labels_presets = [
+            p for p in self.preferences.labels_presets if p.id != preset_id
+        ]
+        if self._current_default_labels_id() == preset_id:
+            self.preferences.default_labels_selection = "none"
+        self._refresh_labels_preset_view()
+
+    # ===================================================================
+    # classes tab
+    # ===================================================================
+
+    def _create_classes_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        layout.addWidget(self._make_hint(
+            "管理 classes.txt 方案（仅内联）。每个方案是一份类别名列表"
+            "（一行一个，从已有 classes.txt 复制粘贴即可）。不读取磁盘文件，"
+            "方案可在不同项目间复用。"
         ))
+
         self.classes_preset_view = PresetListView(new_button_text="+ 新建 classes 方案…")
         self.classes_preset_view.selectionChanged.connect(self._on_classes_selection_changed)
         self.classes_preset_view.requestNew.connect(self._on_classes_preset_new)
         self.classes_preset_view.requestEdit.connect(self._on_classes_preset_edit)
         self.classes_preset_view.requestDuplicate.connect(self._on_classes_preset_duplicate)
         self.classes_preset_view.requestDelete.connect(self._on_classes_preset_delete)
-        classes_layout.addWidget(self.classes_preset_view)
-        outer.addWidget(classes_group)
+        layout.addWidget(self.classes_preset_view, stretch=1)
 
-        outer.addStretch()
-
-        self._refresh_labels_preset_view()
         self._refresh_classes_preset_view()
-        self._refresh_output_preview()
         return tab
 
-    def _preview_folder(self) -> Path:
-        parent = self.parent()
-        state = getattr(parent, "state", None)
-        if state is not None:
-            opened = getattr(state, "image_folder", "")
-            if opened:
-                return Path(opened)
-        return Path("/data/dataset_A")
+    def _current_default_classes_id(self) -> str:
+        sel = (self.preferences.default_classes_selection or "none").strip()
+        if sel.startswith("preset:"):
+            return sel.split(":", 1)[1]
+        return ""
+
+    def _refresh_classes_preset_view(self) -> None:
+        items = [
+            PresetItem(id=p.id, title=p.name, subtitle=f"{len(p.names)} 类别", icon="📋")
+            for p in self.preferences.classes_presets
+        ]
+        self.classes_preset_view.set_presets(items, self._current_default_classes_id())
+
+    def _on_classes_selection_changed(self, preset_id: str) -> None:
+        self.preferences.default_classes_selection = f"preset:{preset_id}"
+
+    def _on_classes_preset_new(self) -> None:
+        editor = ClassesPresetEditor(parent=self)
+        if editor.exec():
+            preset = editor.result_preset()
+            if preset is None:
+                return
+            self.preferences.classes_presets.append(preset)
+            self.preferences.default_classes_selection = f"preset:{preset.id}"
+            self._refresh_classes_preset_view()
+
+    def _on_classes_preset_edit(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.classes_presets, preset_id)
+        if preset is None:
+            return
+        editor = ClassesPresetEditor(preset=preset, parent=self)
+        if editor.exec():
+            updated = editor.result_preset()
+            if updated is None:
+                return
+            preset.name = updated.name
+            preset.names = list(updated.names)
+            self._refresh_classes_preset_view()
+
+    def _on_classes_preset_duplicate(self, preset_id: str) -> None:
+        original = self._find_preset(self.preferences.classes_presets, preset_id)
+        if original is None:
+            return
+        clone = ClassesPreset(
+            id=ClassesPreset.new_id(),
+            name=f"{original.name} 副本",
+            names=list(original.names),
+        )
+        self.preferences.classes_presets.append(clone)
+        self._refresh_classes_preset_view()
+
+    def _on_classes_preset_delete(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.classes_presets, preset_id)
+        if preset is None:
+            return
+        if QMessageBox.question(self, "确认删除", f"确定删除方案「{preset.name}」？") != QMessageBox.StandardButton.Yes:
+            return
+        self.preferences.classes_presets = [
+            p for p in self.preferences.classes_presets if p.id != preset_id
+        ]
+        if self._current_default_classes_id() == preset_id:
+            self.preferences.default_classes_selection = "none"
+        self._refresh_classes_preset_view()
+
+    # ===================================================================
+    # 排序 tab — PresetListView + direction radio
+    # ===================================================================
+
+    def _create_sort_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        layout.addWidget(self._make_hint(
+            "管理排序方案。前三项是内置；自定义方案用 Python 表达式（沙箱执行）。"
+            "选中一项即作为默认排序。"
+        ))
+
+        self.sort_preset_view = PresetListView(new_button_text="+ 新建自定义方案…")
+        self.sort_preset_view.selectionChanged.connect(self._on_sort_selection_changed)
+        self.sort_preset_view.requestNew.connect(self._on_sort_preset_new)
+        self.sort_preset_view.requestEdit.connect(self._on_sort_preset_edit)
+        self.sort_preset_view.requestDuplicate.connect(self._on_sort_preset_duplicate)
+        self.sort_preset_view.requestDelete.connect(self._on_sort_preset_delete)
+        layout.addWidget(self.sort_preset_view, stretch=1)
+
+        direction_row = QHBoxLayout()
+        direction_row.setContentsMargins(0, 6, 0, 0)
+        direction_row.addWidget(QLabel("<b>排序顺序：</b>"))
+        self.sort_asc_radio = QRadioButton("升序")
+        self.sort_desc_radio = QRadioButton("降序")
+        if self.preferences.sort_descending:
+            self.sort_desc_radio.setChecked(True)
+        else:
+            self.sort_asc_radio.setChecked(True)
+        group = QButtonGroup(self)
+        group.addButton(self.sort_asc_radio)
+        group.addButton(self.sort_desc_radio)
+        direction_row.addSpacing(12)
+        direction_row.addWidget(self.sort_asc_radio)
+        direction_row.addWidget(self.sort_desc_radio)
+        direction_row.addStretch()
+        layout.addLayout(direction_row)
+
+        self._refresh_sort_preset_view()
+        return tab
+
+    def _refresh_sort_preset_view(self) -> None:
+        items = []
+        for preset in self.preferences.sort_presets:
+            if preset.kind == "builtin":
+                subtitle = {
+                    "natural": "1, 2, 10",
+                    "name": "1, 10, 2",
+                    "mtime": "按修改时间",
+                }.get(preset.field, "")
+                icon = {"natural": "📄", "name": "📝", "mtime": "🕒"}.get(preset.field, "📄")
+                items.append(PresetItem(
+                    id=preset.id, title=preset.name, subtitle=subtitle, icon=icon, builtin=True,
+                ))
+            else:
+                expr = preset.expression or ""
+                if len(expr) > 60:
+                    expr = expr[:57] + "…"
+                items.append(PresetItem(
+                    id=preset.id, title=preset.name, subtitle=expr, icon="🐍",
+                ))
+        self.sort_preset_view.set_presets(items, self.preferences.active_sort_preset_id)
+
+    def _on_sort_selection_changed(self, preset_id: str) -> None:
+        self.preferences.active_sort_preset_id = preset_id
+
+    def _on_sort_preset_new(self) -> None:
+        editor = CustomSortPresetEditor(parent=self)
+        if editor.exec():
+            preset = editor.result_preset()
+            if preset is None:
+                return
+            self.preferences.sort_presets.append(preset)
+            self.preferences.active_sort_preset_id = preset.id
+            self._refresh_sort_preset_view()
+
+    def _on_sort_preset_edit(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.sort_presets, preset_id)
+        if preset is None or preset.kind == "builtin":
+            return
+        editor = CustomSortPresetEditor(preset=preset, parent=self)
+        if editor.exec():
+            updated = editor.result_preset()
+            if updated is None:
+                return
+            preset.name = updated.name
+            preset.expression = updated.expression
+            self._refresh_sort_preset_view()
+
+    def _on_sort_preset_duplicate(self, preset_id: str) -> None:
+        original = self._find_preset(self.preferences.sort_presets, preset_id)
+        if original is None or original.kind == "builtin":
+            return
+        clone = SortPreset(
+            id=SortPreset.new_id(),
+            name=f"{original.name} 副本",
+            kind="custom",
+            expression=original.expression,
+        )
+        self.preferences.sort_presets.append(clone)
+        self._refresh_sort_preset_view()
+
+    def _on_sort_preset_delete(self, preset_id: str) -> None:
+        preset = self._find_preset(self.preferences.sort_presets, preset_id)
+        if preset is None or preset.kind == "builtin":
+            return
+        if QMessageBox.question(self, "确认删除", f"确定删除方案「{preset.name}」？") != QMessageBox.StandardButton.Yes:
+            return
+        self.preferences.sort_presets = [
+            p for p in self.preferences.sort_presets if p.id != preset_id
+        ]
+        if self.preferences.active_sort_preset_id == preset_id:
+            self.preferences.active_sort_preset_id = "builtin:natural"
+        self._refresh_sort_preset_view()
+
+    # ===================================================================
+    # 输出 tab — just the template editor
+    # ===================================================================
+
+    def _create_output_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        layout.addWidget(self._make_hint(
+            "全局输出目录模板：打开任意源目录时，按此模板渲染默认输出位置。"
+            "每个源目录可在「分类 → 本目录设置」里单独覆盖。"
+        ))
+
+        layout.addWidget(QLabel("<b>输出目录模板</b>"))
+        self.output_template_edit = QLineEdit(self.preferences.output_dir_template)
+        self.output_template_edit.setPlaceholderText("{parent}/{name}_filtered")
+        self.output_template_edit.textChanged.connect(self._refresh_output_preview)
+        layout.addWidget(self.output_template_edit)
+
+        self.output_template_hint = QLabel(
+            "可用变量：<code>{folder}</code> <code>{name}</code> "
+            "<code>{parent}</code> <code>{stem}</code>"
+        )
+        self.output_template_hint.setTextFormat(Qt.TextFormat.RichText)
+        self.output_template_hint.setStyleSheet("color: #6b7280; font-size: 11px;")
+        layout.addWidget(self.output_template_hint)
+
+        self.output_template_preview = QLabel("")
+        self.output_template_preview.setStyleSheet("color: #6b7280; font-size: 11px;")
+        self.output_template_preview.setWordWrap(True)
+        layout.addWidget(self.output_template_preview)
+
+        layout.addStretch()
+        self._refresh_output_preview()
+        return tab
 
     def _refresh_output_preview(self) -> None:
         if not hasattr(self, "output_template_preview"):
@@ -674,269 +699,8 @@ class PreferencesDialog(QDialog):
             self.output_template_preview.setText(f"模板错误：{exc}")
             self.output_template_preview.setStyleSheet("color: #C62828; font-size: 11px;")
 
-    # ---- Labels preset helpers ----
-
-    def _current_default_labels_id(self) -> str:
-        sel = (self.preferences.default_labels_selection or "none").strip()
-        if sel.startswith("preset:"):
-            return sel.split(":", 1)[1]
-        return ""
-
-    def _refresh_labels_preset_view(self) -> None:
-        items = [
-            PresetItem(
-                id=p.id,
-                title=p.name,
-                subtitle=p.path or "(空)",
-                icon="📁",
-                builtin=False,
-            )
-            for p in self.preferences.labels_presets
-        ]
-        self.labels_preset_view.set_presets(items, self._current_default_labels_id())
-
-    def _on_labels_selection_changed(self, preset_id: str) -> None:
-        self.preferences.default_labels_selection = f"preset:{preset_id}"
-
-    def _on_labels_preset_new(self) -> None:
-        editor = LabelsPresetEditor(preview_folder=self._preview_folder(), parent=self)
-        if editor.exec():
-            preset = editor.result_preset()
-            if preset is None:
-                return
-            self.preferences.labels_presets.append(preset)
-            self.preferences.default_labels_selection = f"preset:{preset.id}"
-            self._refresh_labels_preset_view()
-
-    def _on_labels_preset_edit(self, preset_id: str) -> None:
-        preset = next((p for p in self.preferences.labels_presets if p.id == preset_id), None)
-        if preset is None:
-            return
-        editor = LabelsPresetEditor(preset=preset, preview_folder=self._preview_folder(), parent=self)
-        if editor.exec():
-            updated = editor.result_preset()
-            if updated is None:
-                return
-            preset.name = updated.name
-            preset.path = updated.path
-            self._refresh_labels_preset_view()
-
-    def _on_labels_preset_duplicate(self, preset_id: str) -> None:
-        original = next((p for p in self.preferences.labels_presets if p.id == preset_id), None)
-        if original is None:
-            return
-        clone = LabelsPreset(
-            id=LabelsPreset.new_id(), name=f"{original.name} 副本", path=original.path
-        )
-        self.preferences.labels_presets.append(clone)
-        self._refresh_labels_preset_view()
-
-    def _on_labels_preset_delete(self, preset_id: str) -> None:
-        preset = next((p for p in self.preferences.labels_presets if p.id == preset_id), None)
-        if preset is None:
-            return
-        if QMessageBox.question(self, "确认删除", f"确定删除方案「{preset.name}」？") != QMessageBox.StandardButton.Yes:
-            return
-        self.preferences.labels_presets = [
-            p for p in self.preferences.labels_presets if p.id != preset_id
-        ]
-        if self._current_default_labels_id() == preset_id:
-            self.preferences.default_labels_selection = "none"
-        self._refresh_labels_preset_view()
-
-    # ---- Classes preset helpers ----
-
-    def _current_default_classes_id(self) -> str:
-        sel = (self.preferences.default_classes_selection or "none").strip()
-        if sel.startswith("preset:"):
-            return sel.split(":", 1)[1]
-        return ""
-
-    def _refresh_classes_preset_view(self) -> None:
-        items = [
-            PresetItem(
-                id=p.id,
-                title=p.name,
-                subtitle=f"{len(p.names)} 类别",
-                icon="📋",
-                builtin=False,
-            )
-            for p in self.preferences.classes_presets
-        ]
-        self.classes_preset_view.set_presets(items, self._current_default_classes_id())
-
-    def _on_classes_selection_changed(self, preset_id: str) -> None:
-        self.preferences.default_classes_selection = f"preset:{preset_id}"
-
-    def _on_classes_preset_new(self) -> None:
-        editor = ClassesPresetEditor(parent=self)
-        if editor.exec():
-            preset = editor.result_preset()
-            if preset is None:
-                return
-            self.preferences.classes_presets.append(preset)
-            self.preferences.default_classes_selection = f"preset:{preset.id}"
-            self._refresh_classes_preset_view()
-
-    def _on_classes_preset_edit(self, preset_id: str) -> None:
-        preset = next((p for p in self.preferences.classes_presets if p.id == preset_id), None)
-        if preset is None:
-            return
-        editor = ClassesPresetEditor(preset=preset, parent=self)
-        if editor.exec():
-            updated = editor.result_preset()
-            if updated is None:
-                return
-            preset.name = updated.name
-            preset.names = list(updated.names)
-            self._refresh_classes_preset_view()
-
-    def _on_classes_preset_duplicate(self, preset_id: str) -> None:
-        original = next((p for p in self.preferences.classes_presets if p.id == preset_id), None)
-        if original is None:
-            return
-        clone = ClassesPreset(
-            id=ClassesPreset.new_id(),
-            name=f"{original.name} 副本",
-            names=list(original.names),
-        )
-        self.preferences.classes_presets.append(clone)
-        self._refresh_classes_preset_view()
-
-    def _on_classes_preset_delete(self, preset_id: str) -> None:
-        preset = next((p for p in self.preferences.classes_presets if p.id == preset_id), None)
-        if preset is None:
-            return
-        if QMessageBox.question(self, "确认删除", f"确定删除方案「{preset.name}」？") != QMessageBox.StandardButton.Yes:
-            return
-        self.preferences.classes_presets = [
-            p for p in self.preferences.classes_presets if p.id != preset_id
-        ]
-        if self._current_default_classes_id() == preset_id:
-            self.preferences.default_classes_selection = "none"
-        self._refresh_classes_preset_view()
-
     # ===================================================================
-    # 排序 tab
-    # ===================================================================
-
-    def _create_sort_tab(self) -> QWidget:
-        tab = QWidget()
-        outer = QVBoxLayout(tab)
-        outer.setContentsMargins(14, 14, 14, 14)
-        outer.setSpacing(10)
-
-        outer.addWidget(QLabel("<b>默认排序方案</b>"))
-        outer.addWidget(self._make_hint(
-            "前三项是内置方案；下方是用户自定义（Python 表达式，沙箱执行）。"
-        ))
-
-        self.sort_preset_view = PresetListView(new_button_text="+ 新建自定义方案…")
-        self.sort_preset_view.selectionChanged.connect(self._on_sort_selection_changed)
-        self.sort_preset_view.requestNew.connect(self._on_sort_preset_new)
-        self.sort_preset_view.requestEdit.connect(self._on_sort_preset_edit)
-        self.sort_preset_view.requestDuplicate.connect(self._on_sort_preset_duplicate)
-        self.sort_preset_view.requestDelete.connect(self._on_sort_preset_delete)
-        outer.addWidget(self.sort_preset_view, stretch=1)
-
-        # Sort direction
-        direction_group = QGroupBox("排序顺序")
-        dir_layout = QHBoxLayout(direction_group)
-        dir_layout.setContentsMargins(10, 10, 10, 10)
-        dir_layout.setSpacing(16)
-        self.sort_asc_radio = QRadioButton("升序")
-        self.sort_desc_radio = QRadioButton("降序")
-        if self.preferences.sort_descending:
-            self.sort_desc_radio.setChecked(True)
-        else:
-            self.sort_asc_radio.setChecked(True)
-        group = QButtonGroup(self)
-        group.addButton(self.sort_asc_radio)
-        group.addButton(self.sort_desc_radio)
-        dir_layout.addWidget(self.sort_asc_radio)
-        dir_layout.addWidget(self.sort_desc_radio)
-        dir_layout.addStretch()
-        outer.addWidget(direction_group)
-
-        self._refresh_sort_preset_view()
-        return tab
-
-    def _refresh_sort_preset_view(self) -> None:
-        items = []
-        for preset in self.preferences.sort_presets:
-            if preset.kind == "builtin":
-                subtitle = {
-                    "natural": "1, 2, 10",
-                    "name": "1, 10, 2",
-                    "mtime": "最新→最旧（升序）",
-                }.get(preset.field, "")
-                icon = {"natural": "📄", "name": "📝", "mtime": "🕒"}.get(preset.field, "📄")
-                items.append(PresetItem(
-                    id=preset.id, title=preset.name, subtitle=subtitle, icon=icon, builtin=True,
-                ))
-            else:
-                expr = preset.expression or ""
-                if len(expr) > 60:
-                    expr = expr[:57] + "…"
-                items.append(PresetItem(
-                    id=preset.id, title=preset.name, subtitle=expr, icon="🐍", builtin=False,
-                ))
-        self.sort_preset_view.set_presets(items, self.preferences.active_sort_preset_id)
-
-    def _on_sort_selection_changed(self, preset_id: str) -> None:
-        self.preferences.active_sort_preset_id = preset_id
-
-    def _on_sort_preset_new(self) -> None:
-        editor = CustomSortPresetEditor(parent=self)
-        if editor.exec():
-            preset = editor.result_preset()
-            if preset is None:
-                return
-            self.preferences.sort_presets.append(preset)
-            self.preferences.active_sort_preset_id = preset.id
-            self._refresh_sort_preset_view()
-
-    def _on_sort_preset_edit(self, preset_id: str) -> None:
-        preset = next((p for p in self.preferences.sort_presets if p.id == preset_id), None)
-        if preset is None or preset.kind == "builtin":
-            return
-        editor = CustomSortPresetEditor(preset=preset, parent=self)
-        if editor.exec():
-            updated = editor.result_preset()
-            if updated is None:
-                return
-            preset.name = updated.name
-            preset.expression = updated.expression
-            self._refresh_sort_preset_view()
-
-    def _on_sort_preset_duplicate(self, preset_id: str) -> None:
-        original = next((p for p in self.preferences.sort_presets if p.id == preset_id), None)
-        if original is None or original.kind == "builtin":
-            return
-        clone = SortPreset(
-            id=SortPreset.new_id(),
-            name=f"{original.name} 副本",
-            kind="custom",
-            expression=original.expression,
-        )
-        self.preferences.sort_presets.append(clone)
-        self._refresh_sort_preset_view()
-
-    def _on_sort_preset_delete(self, preset_id: str) -> None:
-        preset = next((p for p in self.preferences.sort_presets if p.id == preset_id), None)
-        if preset is None or preset.kind == "builtin":
-            return
-        if QMessageBox.question(self, "确认删除", f"确定删除方案「{preset.name}」？") != QMessageBox.StandardButton.Yes:
-            return
-        self.preferences.sort_presets = [
-            p for p in self.preferences.sort_presets if p.id != preset_id
-        ]
-        if self.preferences.active_sort_preset_id == preset_id:
-            self.preferences.active_sort_preset_id = "builtin:natural"
-        self._refresh_sort_preset_view()
-
-    # ===================================================================
-    # 显示 tab
+    # 显示 / 行为 / 导入导出
     # ===================================================================
 
     def _create_display_tab(self) -> QWidget:
@@ -972,10 +736,6 @@ class PreferencesDialog(QDialog):
         self.theme_combo.setCurrentText(self.preferences.theme)
         layout.addRow("主题", self.theme_combo)
         return tab
-
-    # ===================================================================
-    # 行为 tab (now also holds conflict / extensions / recursive)
-    # ===================================================================
 
     def _create_behavior_tab(self) -> QWidget:
         tab = QWidget()
@@ -1032,10 +792,6 @@ class PreferencesDialog(QDialog):
         layout.addRow(self.remember_recursive_check)
         return tab
 
-    # ===================================================================
-    # 导入/导出 tab
-    # ===================================================================
-
     def _create_import_export_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -1054,40 +810,31 @@ class PreferencesDialog(QDialog):
         return tab
 
     # ===================================================================
-    # Misc helpers
+    # Misc
     # ===================================================================
 
-    def _make_hint(self, text: str) -> QLabel:
-        label = QLabel(text)
-        label.setTextFormat(Qt.TextFormat.RichText)
-        label.setStyleSheet("color: #6b7280; font-size: 11px;")
-        label.setWordWrap(True)
-        return label
+    @staticmethod
+    def _find_preset(presets, preset_id: str):
+        for preset in presets:
+            if preset.id == preset_id:
+                return preset
+        return None
 
-    def _set_combo_by_data(self, combo: QComboBox, value) -> None:
-        index = combo.findData(value)
-        if index >= 0:
-            combo.setCurrentIndex(index)
+    def _preview_folder(self) -> Path:
+        parent = self.parent()
+        state = getattr(parent, "state", None)
+        if state is not None:
+            opened = getattr(state, "image_folder", "")
+            if opened:
+                return Path(opened)
+        return Path("/data/dataset_A")
 
     # ===================================================================
-    # Apply / accept — gather all UI state into self.preferences
+    # Apply / accept
     # ===================================================================
 
     def _update_preferences_from_ui(self) -> bool:
-        # Sync the category table edits back to the active preset first.
-        self._sync_table_to_active_preset()
-
-        # Validate every category preset.
-        for preset in self.preferences.category_presets:
-            error = self._validate_categories(preset.categories)
-            if error:
-                self.error_label.setText(
-                    f"方案「{preset.name}」校验失败：{error}"
-                )
-                return False
-        self.preferences.active_category_preset = self._active_category_preset_id
-
-        # Output template — try rendering against a sample folder to validate.
+        # Output template — validate by rendering against a sample folder.
         template = self.output_template_edit.text().strip() or "{parent}/{name}_filtered"
         try:
             sample = self._preview_folder()
@@ -1100,12 +847,8 @@ class PreferencesDialog(QDialog):
             return False
         self.preferences.output_dir_template = template
 
-        # Labels / classes: presets already mutated live via editor handlers;
-        # default selection persisted on selectionChanged. Nothing extra here.
-
         # Sort direction
         self.preferences.sort_descending = self.sort_desc_radio.isChecked()
-        # active_sort_preset_id persisted live.
 
         # Display
         self.preferences.autoplay_interval_ms = self.autoplay_spin.value()

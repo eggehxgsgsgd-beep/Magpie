@@ -6,10 +6,8 @@ from pathlib import Path
 import pytest
 
 from magpie.config import (
-    AppState,
     Preferences,
     ProjectPathError,
-    migrate_legacy_paths,
     resolve_active_categories,
     resolve_active_sort,
     resolve_class_names,
@@ -185,54 +183,17 @@ def test_active_sort_resolves_custom_preset() -> None:
     assert preset.kind == "custom"
 
 
-# ---- Legacy migration ----
+# ---- Defaults serialization sanity ----
 
-def test_legacy_paths_migrate_into_overrides(tmp_path: Path) -> None:
-    path = tmp_path / "preferences.json"
-    path.write_text(
-        json.dumps(
-            {
-                "source_dir": "/old/source",
-                "output_dir": "/old/output",
-                "labels_dir": "/old/labels",
-                "classes_mode": "custom",
-                "classes_path": "/nonexistent/classes.txt",
-            }
-        ),
-        encoding="utf-8",
-    )
-    prefs = Preferences.load(path)
-    state = AppState(image_folder="/data/legacy")
-    changed = migrate_legacy_paths(prefs, state)
-    assert changed
-    overrides = state.overrides_for("/data/legacy")
-    assert overrides == {
-        "output_dir": "/old/output",
-        "labels_selection": "path:/old/labels",
-        "classes_selection": "preset:legacy",
-    }
-    assert prefs.legacy_source_dir == ""
-    assert prefs.legacy_output_dir == ""
-    assert prefs.legacy_labels_dir == ""
-    assert prefs.legacy_classes_path == ""
-
-
-def test_migration_is_noop_when_clean() -> None:
-    prefs = Preferences.default()
-    state = AppState()
-    assert migrate_legacy_paths(prefs, state) is False
-
-
-def test_preferences_roundtrip_drops_legacy_keys(tmp_path: Path) -> None:
+def test_preferences_default_serialization(tmp_path: Path) -> None:
     path = tmp_path / "preferences.json"
     prefs = Preferences.default()
     prefs.save(path)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    assert "source_dir" not in raw
-    assert "output_dir" not in raw
-    assert "labels_dir" not in raw
-    assert "classes_path" not in raw or raw["classes_path"] == ""
     assert raw["output_dir_template"] == "{parent}/{name}_filtered"
     assert raw["default_labels_selection"] == "none"
     assert raw["default_classes_selection"] == "none"
     assert raw["active_sort_preset_id"] == "builtin:natural"
+    # No legacy field names should appear.
+    for legacy_key in ("source_dir", "labels_dir", "labels_dir_relative", "classes_mode"):
+        assert legacy_key not in raw

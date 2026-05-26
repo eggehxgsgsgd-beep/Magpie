@@ -1,13 +1,8 @@
-"""Output-directory template resolution and one-shot legacy path migration.
+"""Output-directory template resolution.
 
-Labels and classes resolution now lives in ``preset_resolution.py``. This
-module keeps only:
-
-- ``resolve_output_dir`` — renders the global output-dir template against a
-  source folder, honoring a per-folder ``output_dir`` override.
-- ``ProjectPathError`` — raised for malformed templates.
-- ``migrate_legacy_paths`` — startup helper that moves pre-1.x absolute path
-  fields into per-folder overrides on the currently-remembered folder.
+Labels and classes resolution lives in ``preset_resolution.py``. This module
+keeps the output-template resolver (template + placeholders → concrete Path)
+and the ``ProjectPathError`` raised for malformed templates.
 """
 
 from __future__ import annotations
@@ -16,7 +11,6 @@ import os
 from pathlib import Path
 
 from .preferences import Preferences
-from .state import AppState
 
 
 class ProjectPathError(ValueError):
@@ -50,52 +44,8 @@ def resolve_output_dir(
         )
     except (KeyError, IndexError) as exc:
         raise ProjectPathError(f"输出目录模板含未知占位符：{exc}") from exc
-    except Exception as exc:  # noqa: BLE001 — surface formatting errors
+    except Exception as exc:  # noqa: BLE001
         raise ProjectPathError(f"输出目录模板无效：{exc}") from exc
     if not rendered.strip():
         raise ProjectPathError("输出目录模板渲染为空字符串")
     return Path(os.path.normpath(rendered)).expanduser()
-
-
-def migrate_legacy_paths(prefs: Preferences, state: AppState) -> bool:
-    """Move legacy absolute paths from ``Preferences`` into per-folder overrides.
-
-    Older Magpie versions stored ``source_dir``/``output_dir``/``labels_dir``/
-    ``classes_path`` as global absolute strings. Those legacy fields are
-    captured by ``Preferences.from_dict`` into ``legacy_*`` attributes; this
-    function moves them into ``state.per_folder_overrides`` for the currently
-    remembered ``image_folder`` (if any) using the new ``preset:``/``path:``
-    encoding, then clears the legacy attributes.
-
-    Returns ``True`` if any change was made (caller should persist).
-    """
-    changed = False
-    folder = state.image_folder
-
-    if prefs.legacy_output_dir:
-        if folder:
-            state.update_overrides(folder, output_dir=prefs.legacy_output_dir)
-        prefs.legacy_output_dir = ""
-        changed = True
-
-    if prefs.legacy_labels_dir:
-        if folder:
-            state.update_overrides(
-                folder, labels_selection=f"path:{prefs.legacy_labels_dir}"
-            )
-        prefs.legacy_labels_dir = ""
-        changed = True
-
-    if prefs.legacy_classes_path:
-        # Preferences-level migration already created an inline "legacy" preset
-        # by reading the file once; point the folder at it.
-        if folder:
-            state.update_overrides(folder, classes_selection="preset:legacy")
-        prefs.legacy_classes_path = ""
-        changed = True
-
-    if prefs.legacy_source_dir:
-        prefs.legacy_source_dir = ""
-        changed = True
-
-    return changed

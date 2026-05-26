@@ -6,7 +6,6 @@ from pathlib import Path
 
 from magpie.models import (
     BUILTIN_SORT_PRESETS,
-    Category,
     CategoryPreset,
     ClassesPreset,
     LabelsPreset,
@@ -39,7 +38,6 @@ DEFAULT_OUTPUT_DIR_TEMPLATE = "{parent}/{name}_filtered"
 
 
 def _default_sort_presets() -> list[SortPreset]:
-    """Always include the 3 built-in sort presets at the top of the list."""
     return [
         SortPreset(id=p.id, name=p.name, kind=p.kind, field=p.field, expression=p.expression)
         for p in BUILTIN_SORT_PRESETS
@@ -85,12 +83,6 @@ class Preferences:
     recursive_scan: bool = False
     remember_recursive_scan: bool = False
 
-    # ---- Legacy raw values (cleared after one-shot migration) ----
-    legacy_source_dir: str = ""
-    legacy_output_dir: str = ""
-    legacy_labels_dir: str = ""
-    legacy_classes_path: str = ""
-
     @classmethod
     def default(cls) -> "Preferences":
         return cls()
@@ -110,16 +102,16 @@ class Preferences:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Preferences":
-        operation = data.get("default_operation", OperationKind.COPY.value)
+        operation_raw = data.get("default_operation", OperationKind.COPY.value)
         try:
-            default_operation = OperationKind(operation)
+            default_operation = OperationKind(operation_raw)
         except ValueError:
             default_operation = OperationKind.COPY
 
-        category_presets, active_category = _load_or_migrate_category_presets(data)
-        labels_presets, default_labels_sel = _load_or_migrate_labels_presets(data)
-        classes_presets, default_classes_sel = _load_or_migrate_classes_presets(data)
-        sort_presets, active_sort_id, sort_desc = _load_or_migrate_sort_presets(data)
+        category_presets, active_category = _load_category_presets(data)
+        labels_presets, default_labels_sel = _load_labels_presets(data)
+        classes_presets, default_classes_sel = _load_classes_presets(data)
+        sort_presets, active_sort_id, sort_desc = _load_sort_presets(data)
 
         return cls(
             category_presets=category_presets,
@@ -145,10 +137,6 @@ class Preferences:
             conflict_strategy=str(data.get("conflict_strategy", "ask")),
             recursive_scan=bool(data.get("recursive_scan", False)),
             remember_recursive_scan=bool(data.get("remember_recursive_scan", False)),
-            legacy_source_dir=str(data.get("source_dir", "")),
-            legacy_output_dir=str(data.get("output_dir", "")),
-            legacy_labels_dir=str(data.get("labels_dir", "")),
-            legacy_classes_path=str(data.get("classes_path", "")) if "classes_presets" not in data else "",
         )
 
     def to_dict(self) -> dict:
@@ -186,142 +174,80 @@ class Preferences:
 
 
 # ---------------------------------------------------------------------------
-# Migration helpers
+# Preset loaders. Each only understands the new schema; unknown / missing
+# keys fall back to empty defaults. There is no legacy migration here on
+# purpose — see plans/memoized-seeking-sedgewick.md.
 # ---------------------------------------------------------------------------
 
 
-def _load_or_migrate_category_presets(data: dict) -> tuple[list[CategoryPreset], str]:
-    """Return (presets, active_id). Migrates legacy flat ``categories`` list."""
+def _load_category_presets(data: dict) -> tuple[list[CategoryPreset], str]:
     raw_presets = data.get("category_presets")
     if isinstance(raw_presets, list) and raw_presets:
-        presets = [CategoryPreset.from_dict(item) for item in raw_presets if isinstance(item, dict)]
+        presets = [
+            CategoryPreset.from_dict(item)
+            for item in raw_presets if isinstance(item, dict)
+        ]
         if not presets:
             presets = _default_category_presets()
         active = str(data.get("active_category_preset") or "").strip()
         if not any(p.id == active for p in presets):
             active = presets[0].id
         return presets, active
-
-    legacy = data.get("categories")
-    if isinstance(legacy, list) and legacy:
-        cats = [Category.from_dict(item) for item in legacy]
-        return [CategoryPreset(id="default", name="默认", categories=cats)], "default"
-
     return _default_category_presets(), "default"
 
 
-def _load_or_migrate_labels_presets(data: dict) -> tuple[list[LabelsPreset], str]:
+def _load_labels_presets(data: dict) -> tuple[list[LabelsPreset], str]:
     raw_presets = data.get("labels_presets")
     if isinstance(raw_presets, list):
-        presets = [LabelsPreset.from_dict(item) for item in raw_presets if isinstance(item, dict)]
+        presets = [
+            LabelsPreset.from_dict(item)
+            for item in raw_presets if isinstance(item, dict)
+        ]
         selection = str(data.get("default_labels_selection") or "").strip() or "none"
         if selection.startswith("preset:") and not any(
             p.id == selection.split(":", 1)[1] for p in presets
         ):
             selection = "none"
         return presets, selection
-
-    legacy_relative = str(data.get("labels_dir_relative") or "").strip()
-    if legacy_relative:
-        legacy_preset = LabelsPreset(id="legacy", name="默认标签目录", path=legacy_relative)
-        return [legacy_preset], "preset:legacy"
     return [], "none"
 
 
-def _load_or_migrate_classes_presets(data: dict) -> tuple[list[ClassesPreset], str]:
+def _load_classes_presets(data: dict) -> tuple[list[ClassesPreset], str]:
     raw_presets = data.get("classes_presets")
     if isinstance(raw_presets, list):
-        presets = [ClassesPreset.from_dict(item) for item in raw_presets if isinstance(item, dict)]
+        presets = [
+            ClassesPreset.from_dict(item)
+            for item in raw_presets if isinstance(item, dict)
+        ]
         selection = str(data.get("default_classes_selection") or "").strip() or "none"
         if selection.startswith("preset:") and not any(
             p.id == selection.split(":", 1)[1] for p in presets
         ):
             selection = "none"
         return presets, selection
-
-    # Legacy: classes_mode = "custom" + classes_path → read once into inline preset.
-    legacy_mode = str(data.get("classes_mode") or "").strip()
-    legacy_path = str(data.get("classes_path") or "").strip()
-    if legacy_mode == "custom" and legacy_path:
-        names: list[str] = []
-        try:
-            content = Path(legacy_path).expanduser().read_text(encoding="utf-8", errors="ignore")
-            names = [line.strip() for line in content.splitlines() if line.strip()]
-        except OSError as exc:
-            print(f"[migration] could not read legacy classes file {legacy_path}: {exc}")
-        legacy_preset = ClassesPreset(id="legacy", name="默认 classes.txt", names=names)
-        return [legacy_preset], "preset:legacy"
     return [], "none"
 
 
-_LEGACY_SORT_FIELD_MIGRATION = {
-    "natural": ("builtin:natural", False),
-    "name_asc": ("builtin:name", False),
-    "name_desc": ("builtin:name", True),
-    "mtime_asc": ("builtin:mtime", False),
-    "mtime_desc": ("builtin:mtime", True),
-    # Size sort removed; fall back to name in the equivalent direction.
-    "size_asc": ("builtin:name", False),
-    "size_desc": ("builtin:name", True),
-    "name": ("builtin:name", False),
-    "mtime": ("builtin:mtime", False),
-}
-
-
-def _load_or_migrate_sort_presets(data: dict) -> tuple[list[SortPreset], str, bool]:
-    """Return (presets, active_id, descending)."""
+def _load_sort_presets(data: dict) -> tuple[list[SortPreset], str, bool]:
     raw_presets = data.get("sort_presets")
-    if isinstance(raw_presets, list) and raw_presets:
-        # New-format file.
-        presets = [SortPreset.from_dict(item) for item in raw_presets if isinstance(item, dict)]
-        # Ensure built-ins are present (in case user-managed JSON dropped them).
-        _ensure_builtin_sort_presets(presets)
-        active = str(data.get("active_sort_preset_id") or "").strip()
-        if not any(p.id == active for p in presets):
-            active = "builtin:natural"
-        desc = bool(data.get("sort_descending", False))
-        return presets, active, desc
-
-    # Legacy: sort_strategy + custom_sort_presets + custom_sort_expr
-    presets = list(_default_sort_presets())
-    raw_custom = data.get("custom_sort_presets") or []
-    for raw in raw_custom:
-        if not isinstance(raw, dict):
-            continue
-        preset = SortPreset.from_dict({**raw, "kind": "custom"})
-        if not any(p.id == preset.id for p in presets):
-            presets.append(preset)
-
-    legacy_expr = str(data.get("custom_sort_expr") or "").strip()
-    if legacy_expr and not any(p.id == "legacy" for p in presets):
-        presets.append(
-            SortPreset(id="legacy", name="自定义", kind="custom", expression=legacy_expr)
-        )
-
-    raw_strategy = str(data.get("sort_strategy") or "").strip()
-    desc_explicit = data.get("sort_descending")
-
-    if raw_strategy.startswith("custom:"):
-        active = raw_strategy
-        desc = bool(desc_explicit) if desc_explicit is not None else False
-    elif raw_strategy in _LEGACY_SORT_FIELD_MIGRATION:
-        active, mapped_desc = _LEGACY_SORT_FIELD_MIGRATION[raw_strategy]
-        desc = bool(desc_explicit) if isinstance(desc_explicit, bool) else mapped_desc
-    elif raw_strategy == "custom" and legacy_expr:
-        active = "legacy"
-        desc = bool(desc_explicit) if desc_explicit is not None else False
-    else:
-        active = "builtin:natural"
-        desc = bool(desc_explicit) if desc_explicit is not None else False
-
+    presets: list[SortPreset] = []
+    if isinstance(raw_presets, list):
+        presets = [
+            SortPreset.from_dict(item)
+            for item in raw_presets if isinstance(item, dict)
+        ]
+    _ensure_builtin_sort_presets(presets)
+    active = str(data.get("active_sort_preset_id") or "").strip()
     if not any(p.id == active for p in presets):
         active = "builtin:natural"
-
+    desc = bool(data.get("sort_descending", False))
     return presets, active, desc
 
 
 def _ensure_builtin_sort_presets(presets: list[SortPreset]) -> None:
-    """Insert any missing builtins at the front, preserving user-set names if any."""
+    """Always keep the 3 built-in presets in the list, prepending any that
+    are missing. Users can rename them in their JSON if they really want,
+    but the IDs are stable."""
     existing_ids = {p.id for p in presets}
     for default in BUILTIN_SORT_PRESETS:
         if default.id not in existing_ids:

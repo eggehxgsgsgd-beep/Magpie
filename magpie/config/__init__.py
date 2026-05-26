@@ -12,11 +12,7 @@ from .preset_resolution import (
     resolve_class_names,
     resolve_labels_dir,
 )
-from .project_paths import (
-    ProjectPathError,
-    migrate_legacy_paths,
-    resolve_output_dir,
-)
+from .project_paths import ProjectPathError, resolve_output_dir
 from .state import AppState
 
 __all__ = [
@@ -30,7 +26,6 @@ __all__ = [
     "app_data_dir",
     "classifications_dir",
     "log_dir",
-    "migrate_legacy_paths",
     "preferences_path",
     "record_path_for_source",
     "resolve_active_categories",

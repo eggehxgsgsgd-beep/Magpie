@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from magpie.config import Preferences
 from magpie.core import CustomSortError, compile_custom_sort_key, list_image_files
 from magpie.models import BUILTIN_SORT_PRESETS, SortPreset
 
@@ -85,33 +84,6 @@ def test_sort_descending_works_with_custom(tmp_path: Path) -> None:
         tmp_path, extensions=["jpg"], sort_preset=preset, sort_descending=True,
     )
     assert [p.name for p in desc] == ["c.jpg", "b.jpg", "a.jpg"]
-
-
-def test_legacy_sort_strategy_migrates_in_preferences(tmp_path: Path) -> None:
-    import json
-    path = tmp_path / "preferences.json"
-    for legacy, expected in [
-        ("name_desc", ("builtin:name", True)),
-        ("mtime_asc", ("builtin:mtime", False)),
-        ("size_desc", ("builtin:name", True)),
-        ("natural", ("builtin:natural", False)),
-    ]:
-        path.write_text(json.dumps({"sort_strategy": legacy}), encoding="utf-8")
-        prefs = Preferences.load(path)
-        assert (prefs.active_sort_preset_id, prefs.sort_descending) == expected
-
-
-def test_legacy_custom_sort_expr_migrates(tmp_path: Path) -> None:
-    import json
-    path = tmp_path / "preferences.json"
-    path.write_text(
-        json.dumps({"sort_strategy": "custom", "custom_sort_expr": "name.lower()"}),
-        encoding="utf-8",
-    )
-    prefs = Preferences.load(path)
-    assert prefs.active_sort_preset_id == "legacy"
-    legacy_preset = next(p for p in prefs.sort_presets if p.id == "legacy")
-    assert legacy_preset.expression == "name.lower()"
 
 
 def test_custom_sort_can_use_mtime(tmp_path: Path) -> None:

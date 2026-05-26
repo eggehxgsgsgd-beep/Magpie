@@ -28,7 +28,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from magpie.models import CategoryPreset, ClassesPreset, LabelsPreset
+from magpie.models import Category, CategoryPreset, ClassesPreset, LabelsPreset
+from magpie.ui.widgets import CategoryTableWidget
 
 
 # ---------------------------------------------------------------------------
@@ -37,17 +38,12 @@ from magpie.models import CategoryPreset, ClassesPreset, LabelsPreset
 
 
 class CategoryPresetEditor(QDialog):
-    """Name-only editor for a category preset.
-
-    Category contents are edited directly in the preferences 类别 tab when the
-    preset is selected. This dialog handles "new preset" (provide a name) and
-    "rename".
-    """
+    """Full editor for a category preset: name + category table."""
 
     def __init__(self, preset: CategoryPreset | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑类别方案" if preset else "新建类别方案")
-        self.resize(380, 140)
+        self.resize(680, 480)
         self._original = preset
         self._result: CategoryPreset | None = None
 
@@ -62,12 +58,19 @@ class CategoryPresetEditor(QDialog):
         form.addRow("方案名称", self.name_edit)
         layout.addLayout(form)
 
-        hint = QLabel("方案名称仅用于显示；类别内容请在「类别」标签页中编辑。")
+        hint = QLabel("可拖动整行调整顺序。双击颜色列可选择类别颜色。")
         hint.setStyleSheet("color: #6b7280; font-size: 11px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        layout.addStretch()
+        self.table = CategoryTableWidget()
+        if preset is not None and preset.categories:
+            self.table.set_categories([Category(**c.to_dict()) for c in preset.categories])
+        layout.addWidget(self.table, stretch=1)
+
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: #C62828; font-size: 11px;")
+        layout.addWidget(self.error_label)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -78,21 +81,18 @@ class CategoryPresetEditor(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self.error_label = QLabel("")
-        self.error_label.setStyleSheet("color: #C62828; font-size: 11px;")
-        layout.insertWidget(layout.count() - 1, self.error_label)
-
     def _on_accept(self) -> None:
         name = self.name_edit.text().strip()
         if not name:
             self.error_label.setText("方案名称不能为空")
             return
-        if self._original is None:
-            self._result = CategoryPreset(id=CategoryPreset.new_id(), name=name, categories=[])
-        else:
-            self._result = CategoryPreset(
-                id=self._original.id, name=name, categories=list(self._original.categories)
-            )
+        error = self.table.validate()
+        if error:
+            self.error_label.setText(error)
+            return
+        categories = self.table.categories()
+        preset_id = self._original.id if self._original is not None else CategoryPreset.new_id()
+        self._result = CategoryPreset(id=preset_id, name=name, categories=categories)
         self.accept()
 
     def result_preset(self) -> CategoryPreset | None:
