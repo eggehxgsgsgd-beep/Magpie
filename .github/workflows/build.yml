@@ -3,20 +3,21 @@ name: Build
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Build (${{ matrix.target }})
     strategy:
+      fail-fast: false
       matrix:
         include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
           - os: windows-latest
             target: windows-x64
-          - os: macos-13
-            target: macos-x64
-          - os: macos-14
-            target: macos-arm64
-          - os: ubuntu-22.04
-            target: linux-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
