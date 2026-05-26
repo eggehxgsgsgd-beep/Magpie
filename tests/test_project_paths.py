@@ -10,11 +10,16 @@ from magpie.config import (
     Preferences,
     ProjectPathError,
     migrate_legacy_paths,
-    resolve_classes_path,
+    resolve_active_categories,
+    resolve_active_sort,
+    resolve_class_names,
     resolve_labels_dir,
     resolve_output_dir,
 )
+from magpie.models import Category, CategoryPreset, ClassesPreset, LabelsPreset, SortPreset
 
+
+# ---- Output template ----
 
 def test_output_default_template_renders_sibling_filtered(tmp_path: Path) -> None:
     prefs = Preferences.default()
@@ -47,62 +52,140 @@ def test_output_override_wins(tmp_path: Path) -> None:
     assert out == tmp_path / "explicit"
 
 
-def test_labels_relative_to_folder(tmp_path: Path) -> None:
-    prefs = Preferences.default()
-    prefs.labels_dir_relative = "labels"
-    folder = tmp_path / "cats"
-    folder.mkdir()
-    labels = resolve_labels_dir(prefs, {}, folder)
-    assert labels == (folder / "labels").resolve()
+# ---- Labels (preset / path / none) ----
 
-
-def test_labels_relative_parent_ref(tmp_path: Path) -> None:
-    prefs = Preferences.default()
-    prefs.labels_dir_relative = "../shared/labels"
-    folder = tmp_path / "cats"
-    folder.mkdir()
-    labels = resolve_labels_dir(prefs, {}, folder)
-    assert labels == (tmp_path / "shared" / "labels").resolve()
-
-
-def test_labels_empty_returns_none(tmp_path: Path) -> None:
+def test_labels_default_none(tmp_path: Path) -> None:
     prefs = Preferences.default()
     assert resolve_labels_dir(prefs, {}, tmp_path) is None
 
 
-def test_labels_override_absolute(tmp_path: Path) -> None:
+def test_labels_preset_relative(tmp_path: Path) -> None:
     prefs = Preferences.default()
-    prefs.labels_dir_relative = "labels"  # ignored when override present
-    overrides = {"labels_dir": str(tmp_path / "elsewhere")}
-    assert resolve_labels_dir(prefs, overrides, tmp_path / "cats") == (
-        tmp_path / "elsewhere"
+    prefs.labels_presets = [LabelsPreset(id="a", name="本地", path="labels")]
+    prefs.default_labels_selection = "preset:a"
+    folder = tmp_path / "cats"
+    assert resolve_labels_dir(prefs, {}, folder) == Path(str(folder / "labels"))
+
+
+def test_labels_preset_with_parent_ref(tmp_path: Path) -> None:
+    prefs = Preferences.default()
+    prefs.labels_presets = [LabelsPreset(id="a", name="共享", path="../shared/labels")]
+    prefs.default_labels_selection = "preset:a"
+    folder = tmp_path / "cats"
+    expected = Path(str((tmp_path / "shared" / "labels")))
+    assert resolve_labels_dir(prefs, {}, folder) == expected
+
+
+def test_labels_override_path_wins(tmp_path: Path) -> None:
+    prefs = Preferences.default()
+    prefs.labels_presets = [LabelsPreset(id="a", name="本地", path="labels")]
+    prefs.default_labels_selection = "preset:a"
+    folder = tmp_path / "cats"
+    out = resolve_labels_dir(
+        prefs, {"labels_selection": "path:/abs/elsewhere"}, folder
     )
+    assert out == Path("/abs/elsewhere")
 
 
-def test_classes_auto_returns_path_even_if_missing(tmp_path: Path) -> None:
-    prefs = Preferences.default()  # classes_mode == "auto"
-    labels = tmp_path / "labels"
-    # Caller will warn the user; the resolver itself does not check existence.
-    assert resolve_classes_path(prefs, {}, labels) == labels / "classes.txt"
-
-
-def test_classes_auto_no_labels_returns_none() -> None:
+def test_labels_override_none(tmp_path: Path) -> None:
     prefs = Preferences.default()
-    assert resolve_classes_path(prefs, {}, None) is None
+    prefs.labels_presets = [LabelsPreset(id="a", name="本地", path="labels")]
+    prefs.default_labels_selection = "preset:a"
+    out = resolve_labels_dir(prefs, {"labels_selection": "none"}, tmp_path)
+    assert out is None
 
 
-def test_classes_custom_returns_path() -> None:
+# ---- Class names (preset / none, NO auto, NO file mode) ----
+
+def test_class_names_default_none() -> None:
     prefs = Preferences.default()
-    prefs.classes_mode = "custom"
-    prefs.classes_path = "/abs/classes.txt"
-    assert resolve_classes_path(prefs, {}, None) == Path("/abs/classes.txt")
+    assert resolve_class_names(prefs, {}) == []
 
 
-def test_classes_override_mode_custom_wins_over_global_auto() -> None:
-    prefs = Preferences.default()  # auto
-    overrides = {"classes_mode": "custom", "classes_path": "/a.txt"}
-    assert resolve_classes_path(prefs, overrides, None) == Path("/a.txt")
+def test_class_names_preset_returns_inline() -> None:
+    prefs = Preferences.default()
+    prefs.classes_presets = [ClassesPreset(id="x", name="C", names=["cat", "dog"])]
+    prefs.default_classes_selection = "preset:x"
+    assert resolve_class_names(prefs, {}) == ["cat", "dog"]
 
+
+def test_class_names_override_wins() -> None:
+    prefs = Preferences.default()
+    prefs.classes_presets = [
+        ClassesPreset(id="a", name="A", names=["one"]),
+        ClassesPreset(id="b", name="B", names=["two", "three"]),
+    ]
+    prefs.default_classes_selection = "preset:a"
+    assert resolve_class_names(prefs, {"classes_selection": "preset:b"}) == ["two", "three"]
+
+
+def test_class_names_unknown_preset_falls_back_to_empty() -> None:
+    prefs = Preferences.default()
+    assert resolve_class_names(prefs, {"classes_selection": "preset:nope"}) == []
+
+
+# ---- Active categories ----
+
+def test_active_categories_default_empty() -> None:
+    prefs = Preferences.default()
+    assert resolve_active_categories(prefs) == []
+
+
+def test_active_categories_picks_active_preset() -> None:
+    prefs = Preferences.default()
+    prefs.category_presets = [
+        CategoryPreset(id="a", name="A", categories=[Category(key="1", folder_name="ok", display_name="OK")]),
+        CategoryPreset(id="b", name="B", categories=[Category(key="2", folder_name="ng", display_name="NG")]),
+    ]
+    prefs.active_category_preset = "b"
+    cats = resolve_active_categories(prefs)
+    assert [c.folder_name for c in cats] == ["ng"]
+
+
+def test_active_categories_falls_back_to_first_when_active_missing() -> None:
+    prefs = Preferences.default()
+    prefs.category_presets = [
+        CategoryPreset(id="a", name="A", categories=[Category(key="1", folder_name="ok", display_name="OK")])
+    ]
+    prefs.active_category_preset = "does-not-exist"
+    cats = resolve_active_categories(prefs)
+    assert [c.folder_name for c in cats] == ["ok"]
+
+
+# ---- Active sort ----
+
+def test_active_sort_returns_builtin_by_default() -> None:
+    prefs = Preferences.default()
+    preset, desc = resolve_active_sort(prefs, {})
+    assert preset.id == "builtin:natural"
+    assert desc is False
+
+
+def test_active_sort_override_changes_preset_and_direction() -> None:
+    prefs = Preferences.default()
+    overrides = {"sort_preset_id": "builtin:mtime", "sort_descending": True}
+    preset, desc = resolve_active_sort(prefs, overrides)
+    assert preset.id == "builtin:mtime"
+    assert desc is True
+
+
+def test_active_sort_unknown_falls_back_to_natural() -> None:
+    prefs = Preferences.default()
+    prefs.active_sort_preset_id = "does-not-exist"
+    preset, _ = resolve_active_sort(prefs, {})
+    assert preset.id == "builtin:natural"
+
+
+def test_active_sort_resolves_custom_preset() -> None:
+    prefs = Preferences.default()
+    prefs.sort_presets.append(SortPreset(id="c1", name="C1", kind="custom", expression="name"))
+    prefs.active_sort_preset_id = "c1"
+    preset, _ = resolve_active_sort(prefs, {})
+    assert preset.id == "c1"
+    assert preset.kind == "custom"
+
+
+# ---- Legacy migration ----
 
 def test_legacy_paths_migrate_into_overrides(tmp_path: Path) -> None:
     path = tmp_path / "preferences.json"
@@ -112,7 +195,8 @@ def test_legacy_paths_migrate_into_overrides(tmp_path: Path) -> None:
                 "source_dir": "/old/source",
                 "output_dir": "/old/output",
                 "labels_dir": "/old/labels",
-                "classes_path": "/old/classes.txt",
+                "classes_mode": "custom",
+                "classes_path": "/nonexistent/classes.txt",
             }
         ),
         encoding="utf-8",
@@ -124,11 +208,9 @@ def test_legacy_paths_migrate_into_overrides(tmp_path: Path) -> None:
     overrides = state.overrides_for("/data/legacy")
     assert overrides == {
         "output_dir": "/old/output",
-        "labels_dir": "/old/labels",
-        "classes_mode": "custom",
-        "classes_path": "/old/classes.txt",
+        "labels_selection": "path:/old/labels",
+        "classes_selection": "preset:legacy",
     }
-    # Legacy fields cleared so future to_dict doesn't echo them.
     assert prefs.legacy_source_dir == ""
     assert prefs.legacy_output_dir == ""
     assert prefs.legacy_labels_dir == ""
@@ -142,8 +224,6 @@ def test_migration_is_noop_when_clean() -> None:
 
 
 def test_preferences_roundtrip_drops_legacy_keys(tmp_path: Path) -> None:
-    # After saving a fresh Preferences, the JSON should not contain source_dir/
-    # output_dir/labels_dir (only the new template fields).
     path = tmp_path / "preferences.json"
     prefs = Preferences.default()
     prefs.save(path)
@@ -151,6 +231,8 @@ def test_preferences_roundtrip_drops_legacy_keys(tmp_path: Path) -> None:
     assert "source_dir" not in raw
     assert "output_dir" not in raw
     assert "labels_dir" not in raw
+    assert "classes_path" not in raw or raw["classes_path"] == ""
     assert raw["output_dir_template"] == "{parent}/{name}_filtered"
-    assert raw["labels_dir_relative"] == ""
-    assert raw["classes_mode"] == "auto"
+    assert raw["default_labels_selection"] == "none"
+    assert raw["default_classes_selection"] == "none"
+    assert raw["active_sort_preset_id"] == "builtin:natural"

@@ -102,43 +102,38 @@ def compile_custom_sort_key(expr: str) -> Callable[[Path], object]:
 def list_image_files(
     folder: str | Path,
     extensions: list[str],
-    sort_strategy: str = "natural",
+    sort_preset,
     recursive: bool = False,
-    custom_sort_presets: list | None = None,
     sort_descending: bool = False,
 ) -> list[Path]:
-    """List image files in ``folder``.
+    """List image files in ``folder``, sorted by ``sort_preset``.
 
-    ``sort_strategy`` is the *field* to sort by: ``natural`` (digits-aware),
-    ``name`` (lexicographic), ``mtime``, or ``custom:<preset_id>``.
-    ``sort_descending`` reverses the result of any field.
+    ``sort_preset`` is a :class:`magpie.models.SortPreset`:
+    - ``kind="builtin"``: ``field`` ∈ {natural, name, mtime}
+    - ``kind="custom"``: ``expression`` is the Python expr (sandboxed eval)
     """
     root = Path(folder)
     suffixes = {f".{ext.lower().lstrip('.')}" for ext in extensions}
     candidates = root.rglob("*") if recursive else root.iterdir()
     files = [path for path in candidates if path.is_file() and path.suffix.lower() in suffixes]
 
-    if sort_strategy == "name":
-        key_fn = lambda item: item.name.lower()  # noqa: E731
-    elif sort_strategy == "mtime":
-        key_fn = lambda item: item.stat().st_mtime  # noqa: E731
-    elif sort_strategy.startswith("custom:"):
-        preset_id = sort_strategy.split(":", 1)[1]
-        preset = _find_preset(custom_sort_presets or [], preset_id)
-        if preset is None:
-            raise CustomSortError(f"未找到自定义排序方案：{preset_id}")
-        key_fn = compile_custom_sort_key(preset.expression)
-    else:  # "natural" (default)
-        key_fn = natural_key
+    if getattr(sort_preset, "kind", "builtin") == "custom":
+        expression = getattr(sort_preset, "expression", "") or ""
+        if not expression.strip():
+            raise CustomSortError(
+                f"自定义排序方案「{getattr(sort_preset, 'name', '?')}」表达式为空"
+            )
+        key_fn = compile_custom_sort_key(expression)
+    else:
+        field = getattr(sort_preset, "field", "natural") or "natural"
+        if field == "name":
+            key_fn = lambda item: item.name.lower()  # noqa: E731
+        elif field == "mtime":
+            key_fn = lambda item: item.stat().st_mtime  # noqa: E731
+        else:  # natural
+            key_fn = natural_key
 
     return sorted(files, key=key_fn, reverse=sort_descending)
-
-
-def _find_preset(presets, preset_id: str):
-    for preset in presets:
-        if getattr(preset, "id", None) == preset_id:
-            return preset
-    return None
 
 
 def load_pixmap(path: str | Path) -> QPixmap:

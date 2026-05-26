@@ -1,4 +1,4 @@
-﻿from .classifications import ClassificationRecord, record_path_for_source
+from .classifications import ClassificationRecord, record_path_for_source
 from .paths import app_data_dir, classifications_dir, log_dir, preferences_path, state_path
 from .preferences import (
     DEFAULT_EXTENSIONS,
@@ -6,11 +6,15 @@ from .preferences import (
     DEFAULT_PALETTE,
     Preferences,
 )
+from .preset_resolution import (
+    resolve_active_categories,
+    resolve_active_sort,
+    resolve_class_names,
+    resolve_labels_dir,
+)
 from .project_paths import (
     ProjectPathError,
     migrate_legacy_paths,
-    resolve_classes_path,
-    resolve_labels_dir,
     resolve_output_dir,
 )
 from .state import AppState
@@ -29,7 +33,9 @@ __all__ = [
     "migrate_legacy_paths",
     "preferences_path",
     "record_path_for_source",
-    "resolve_classes_path",
+    "resolve_active_categories",
+    "resolve_active_sort",
+    "resolve_class_names",
     "resolve_labels_dir",
     "resolve_output_dir",
     "state_path",

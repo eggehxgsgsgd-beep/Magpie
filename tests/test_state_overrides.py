@@ -11,8 +11,10 @@ def test_overrides_roundtrip(tmp_path):
     state.add_recent_folder("/data/a")
     state.update_overrides(
         "/data/a",
-        sort_strategy="name",
+        sort_preset_id="builtin:name",
         sort_descending=True,
+        labels_selection="preset:lp1",
+        classes_selection="preset:cp1",
         conflict_strategy="skip",
         recursive_scan=True,
         current_index=42,
@@ -21,11 +23,15 @@ def test_overrides_roundtrip(tmp_path):
 
     loaded = AppState.load(path)
     overrides = loaded.overrides_for("/data/a")
-    assert overrides["sort_strategy"] == "name"
-    assert overrides["sort_descending"] is True
-    assert overrides["conflict_strategy"] == "skip"
-    assert overrides["recursive_scan"] is True
-    assert overrides["current_index"] == 42
+    assert overrides == {
+        "sort_preset_id": "builtin:name",
+        "sort_descending": True,
+        "labels_selection": "preset:lp1",
+        "classes_selection": "preset:cp1",
+        "conflict_strategy": "skip",
+        "recursive_scan": True,
+        "current_index": 42,
+    }
 
 
 def test_overrides_unknown_folder_returns_empty(tmp_path):
@@ -33,10 +39,9 @@ def test_overrides_unknown_folder_returns_empty(tmp_path):
     assert state.overrides_for("/no/such") == {}
 
 
-def test_legacy_sort_value_migrates(tmp_path):
+def test_legacy_sort_strategy_migrates(tmp_path):
     """Pre-split 'name_desc' / 'mtime_asc' / 'size_*' values stored in
-    per_folder_overrides must split into (sort_strategy, sort_descending) on
-    load. 'size_*' falls back to name with the same direction."""
+    per_folder_overrides must split into (sort_preset_id, sort_descending)."""
     path = tmp_path / "state.json"
     path.write_text(
         json.dumps(
@@ -46,10 +51,6 @@ def test_legacy_sort_value_migrates(tmp_path):
                     "/data/b": {"sort_strategy": "mtime_asc"},
                     "/data/c": {"sort_strategy": "size_desc"},
                     "/data/d": {"sort_strategy": "natural"},
-                    "/data/e": {
-                        "sort_strategy": "name",
-                        "sort_descending": True,
-                    },
                 }
             }
         ),
@@ -57,21 +58,53 @@ def test_legacy_sort_value_migrates(tmp_path):
     )
     loaded = AppState.load(path)
     assert loaded.overrides_for("/data/a") == {
-        "sort_strategy": "name", "sort_descending": True,
+        "sort_preset_id": "builtin:name", "sort_descending": True,
     }
     assert loaded.overrides_for("/data/b") == {
-        "sort_strategy": "mtime", "sort_descending": False,
+        "sort_preset_id": "builtin:mtime", "sort_descending": False,
     }
     assert loaded.overrides_for("/data/c") == {
-        "sort_strategy": "name", "sort_descending": True,
+        "sort_preset_id": "builtin:name", "sort_descending": True,
     }
     assert loaded.overrides_for("/data/d") == {
-        "sort_strategy": "natural", "sort_descending": False,
+        "sort_preset_id": "builtin:natural", "sort_descending": False,
     }
-    # Already new format: untouched
-    assert loaded.overrides_for("/data/e") == {
-        "sort_strategy": "name", "sort_descending": True,
+
+
+def test_legacy_labels_dir_migrates_to_path_selection(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "per_folder_overrides": {
+                    "/data/a": {"labels_dir": "/abs/labels"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = AppState.load(path)
+    assert loaded.overrides_for("/data/a") == {
+        "labels_selection": "path:/abs/labels",
     }
+
+
+def test_legacy_classes_mode_migrates(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "per_folder_overrides": {
+                    "/data/custom": {"classes_mode": "custom", "classes_path": "/abs/c.txt"},
+                    "/data/auto": {"classes_mode": "auto"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = AppState.load(path)
+    assert loaded.overrides_for("/data/custom") == {"classes_selection": "preset:legacy"}
+    assert loaded.overrides_for("/data/auto") == {"classes_selection": "none"}
 
 
 def test_overrides_unknown_keys_dropped(tmp_path):
@@ -81,7 +114,7 @@ def test_overrides_unknown_keys_dropped(tmp_path):
             {
                 "per_folder_overrides": {
                     "/data/a": {
-                        "sort_strategy": "name",
+                        "sort_preset_id": "builtin:name",
                         "garbage_key": 1,
                     },
                     "not-a-dict": "should-be-skipped",
@@ -91,28 +124,11 @@ def test_overrides_unknown_keys_dropped(tmp_path):
         encoding="utf-8",
     )
     loaded = AppState.load(path)
-    assert loaded.overrides_for("/data/a") == {"sort_strategy": "name"}
+    assert loaded.overrides_for("/data/a") == {"sort_preset_id": "builtin:name"}
     assert "not-a-dict" not in loaded.per_folder_overrides
-
-
-def test_legacy_state_without_overrides_loads(tmp_path):
-    path = tmp_path / "state.json"
-    path.write_text(
-        json.dumps(
-            {
-                "image_folder": "/data/legacy",
-                "current_index": 1,
-                "recent_folders": ["/data/legacy"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    loaded = AppState.load(path)
-    assert loaded.image_folder == "/data/legacy"
-    assert loaded.per_folder_overrides == {}
 
 
 def test_update_overrides_ignores_none_values():
     state = AppState()
-    state.update_overrides("/data/a", sort_strategy="natural", conflict_strategy=None)
-    assert state.overrides_for("/data/a") == {"sort_strategy": "natural"}
+    state.update_overrides("/data/a", sort_preset_id="builtin:natural", conflict_strategy=None)
+    assert state.overrides_for("/data/a") == {"sort_preset_id": "builtin:natural"}

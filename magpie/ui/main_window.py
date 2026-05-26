@@ -25,7 +25,9 @@ from magpie.config import (
     ClassificationRecord,
     Preferences,
     ProjectPathError,
-    resolve_classes_path,
+    resolve_active_categories,
+    resolve_active_sort,
+    resolve_class_names,
     resolve_labels_dir,
     resolve_output_dir,
 )
@@ -37,13 +39,12 @@ from magpie.core import (
     ensure_category_folders,
     label_path_for_image,
     list_image_files,
-    load_class_names,
     load_pixmap,
     load_yolo_labels,
     resolve_target_path,
     undo_operation,
 )
-from magpie.models import Category, OperationKind
+from magpie.models import BUILTIN_SORT_PRESETS, Category, OperationKind, SortPreset
 from magpie.ui.conflict_dialog import ConflictDialog
 from magpie.ui.image_view import ImageView
 from magpie.ui.preferences_dialog import PreferencesDialog
@@ -103,16 +104,15 @@ class MainWindow(QMainWindow):
         self.classification_record: ClassificationRecord | None = None
         self.remembered_conflict_strategy: str | None = None
         self.batch_conflict_strategy: str | None = None
-        self.active_sort_strategy: str = self.preferences.sort_strategy
-        self.active_sort_descending: bool = self.preferences.sort_descending
+        # Active project-resolved state. Re-resolved every time a folder opens.
+        self.active_sort_preset, self.active_sort_descending = resolve_active_sort(
+            self.preferences, None
+        )
         self.active_conflict_strategy: str = self.preferences.conflict_strategy
         self.active_recursive_scan: bool = self.preferences.recursive_scan
         self.active_output_dir: Path | None = None
         self.active_labels_dir: Path | None = None
-        self.active_classes_path: Path | None = None
-        # Session-level set of folder keys where the user has already chosen to
-        # skip the "classes.txt missing" prompt; cleared on app restart.
-        self._classes_prompt_skipped: set[str] = set()
+        self.active_categories: list[Category] = resolve_active_categories(self.preferences)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_image)
@@ -327,7 +327,7 @@ class MainWindow(QMainWindow):
             shortcut.deleteLater()
         self.category_shortcuts.clear()
 
-        for category in self.preferences.categories:
+        for category in self.active_categories:
             shortcut = QShortcut(QKeySequence(category.key), self)
             shortcut.activated.connect(lambda category=category: self.classify_current_image(category))
             self.category_shortcuts.append(shortcut)
@@ -355,19 +355,27 @@ class MainWindow(QMainWindow):
         result = dialog.result_overrides()
         if result is None:
             return
-        # Clear then re-apply.  update_overrides ignores empty strings, but we
-        # need to drop keys that the user reverted to defaults — do it by hand.
+        # Clear preset-related override keys then re-apply only those the user
+        # actually set (None = revert to global default).
         existing = dict(self.state.per_folder_overrides.get(self.state.image_folder, {}))
-        for key in ("output_dir", "labels_dir", "classes_mode", "classes_path"):
+        for key in (
+            "output_dir",
+            "labels_selection",
+            "classes_selection",
+            "sort_preset_id",
+            "sort_descending",
+        ):
             existing.pop(key, None)
         for key, value in {
             "output_dir": result.output_dir,
-            "labels_dir": result.labels_dir,
-            "classes_mode": result.classes_mode,
-            "classes_path": result.classes_path,
+            "labels_selection": result.labels_selection,
+            "classes_selection": result.classes_selection,
+            "sort_preset_id": result.sort_preset_id,
+            "sort_descending": result.sort_descending,
         }.items():
-            if value:
-                existing[key] = value
+            if value is None:
+                continue
+            existing[key] = value
         if existing:
             self.state.per_folder_overrides[self.state.image_folder] = existing
         else:
@@ -383,13 +391,17 @@ class MainWindow(QMainWindow):
 
         folder_key = str(folder_path)
         overrides = self.state.overrides_for(folder_key)
-        self.active_sort_strategy = overrides.get("sort_strategy", self.preferences.sort_strategy)
-        self.active_sort_descending = bool(
-            overrides.get("sort_descending", self.preferences.sort_descending)
+
+        # Resolve active sort preset (built-in or custom) + descending flag.
+        self.active_sort_preset, self.active_sort_descending = resolve_active_sort(
+            self.preferences, overrides
         )
         self.active_conflict_strategy = overrides.get(
             "conflict_strategy", self.preferences.conflict_strategy
         )
+        # Refresh categories from current global active (no per-project override).
+        self.active_categories = resolve_active_categories(self.preferences)
+
         if "recursive_scan" in overrides:
             recursive = bool(overrides["recursive_scan"])
         else:
@@ -402,23 +414,27 @@ class MainWindow(QMainWindow):
             self.image_files = list_image_files(
                 folder_path,
                 self.preferences.file_extensions,
-                self.active_sort_strategy,
+                self.active_sort_preset,
                 recursive=recursive,
-                custom_sort_presets=self.preferences.custom_sort_presets,
                 sort_descending=self.active_sort_descending,
             )
         except CustomSortError as exc:
             QMessageBox.warning(
                 self,
                 "自定义排序失败",
-                f"{exc}\n\n请到 文件 → 首选项 → 扫描与写入 修改表达式，已临时回退为自然排序。",
+                f"{exc}\n\n请到 文件 → 首选项 → 排序 检查方案，已临时回退为自然排序。",
             )
-            self.active_sort_strategy = "natural"
+            self.active_sort_preset = SortPreset(
+                id=BUILTIN_SORT_PRESETS[0].id,
+                name=BUILTIN_SORT_PRESETS[0].name,
+                kind="builtin",
+                field=BUILTIN_SORT_PRESETS[0].field,
+            )
             self.active_sort_descending = False
             self.image_files = list_image_files(
                 folder_path,
                 self.preferences.file_extensions,
-                "natural",
+                self.active_sort_preset,
                 recursive=recursive,
             )
         except Exception as exc:
@@ -442,11 +458,9 @@ class MainWindow(QMainWindow):
             )
             self.active_output_dir = folder_path.parent / f"{folder_path.name}_filtered"
         self.active_labels_dir = resolve_labels_dir(self.preferences, overrides, folder_path)
-        self.active_classes_path = resolve_classes_path(
-            self.preferences, overrides, self.active_labels_dir
-        )
+        self.class_names = resolve_class_names(self.preferences, overrides)
 
-        ensure_category_folders(self.active_output_dir, self.preferences.categories)
+        ensure_category_folders(self.active_output_dir, self.active_categories)
         self.history.clear()
         self.remembered_conflict_strategy = None
         self.batch_conflict_strategy = None
@@ -472,10 +486,6 @@ class MainWindow(QMainWindow):
                 f"默认输出 → {self.active_output_dir}（分类 → 本目录设置 可修改）",
                 5000,
             )
-
-        # Check whether classes.txt is missing and prompt the user once per
-        # session per folder (auto mode only; BBox display must be on).
-        self._maybe_prompt_missing_classes()
 
     def _resolve_recursive_scan(self, folder_path: Path) -> bool:
         if self.preferences.remember_recursive_scan:
@@ -516,10 +526,8 @@ class MainWindow(QMainWindow):
                 boxes = load_yolo_labels(
                     label_path_for_image(self.active_labels_dir, image_path)
                 )
-                classes_path = self.active_classes_path
-                self.class_names = load_class_names(classes_path) if classes_path else []
                 pixmap = draw_bboxes_on_pixmap(
-                    pixmap, boxes, self.preferences.categories, self.class_names
+                    pixmap, boxes, self.active_categories, self.class_names
                 )
         except Exception as exc:
             self.status.showMessage(f"图片加载失败：{exc}", 5000)
@@ -631,10 +639,10 @@ class MainWindow(QMainWindow):
         reveal_action.triggered.connect(self.reveal_current_image)
         menu.addAction(reveal_action)
 
-        if self.preferences.categories:
+        if self.active_categories:
             menu.addSeparator()
             classify_menu = menu.addMenu("分类到")
-            for category in self.preferences.categories:
+            for category in self.active_categories:
                 label = f"{category.label}  [{category.key}]"
                 action = QAction(label, classify_menu)
                 action.triggered.connect(
@@ -753,6 +761,7 @@ class MainWindow(QMainWindow):
             self.mode_action.setChecked(self.operation_kind == OperationKind.MOVE)
             self.show_bbox_action.setChecked(self.preferences.show_bboxes)
             self.timer.setInterval(self.preferences.autoplay_interval_ms)
+            self.active_categories = resolve_active_categories(self.preferences)
             self._refresh_side_panel()
             self._register_category_shortcuts()
             if self.state.image_folder:
@@ -760,8 +769,9 @@ class MainWindow(QMainWindow):
                 # the per-category output subdirs with the new template.
                 self.open_image_folder(self.state.image_folder, reset_index=False)
             else:
-                self.active_sort_strategy = self.preferences.sort_strategy
-                self.active_sort_descending = self.preferences.sort_descending
+                self.active_sort_preset, self.active_sort_descending = resolve_active_sort(
+                    self.preferences, None
+                )
                 self.active_conflict_strategy = self.preferences.conflict_strategy
                 self.active_recursive_scan = self.preferences.recursive_scan
 
@@ -769,61 +779,6 @@ class MainWindow(QMainWindow):
         self.preferences.show_bboxes = self.show_bbox_action.isChecked()
         self.preferences.save()
         self._load_current_image(fit=False)
-        if self.show_bbox_action.isChecked():
-            self._maybe_prompt_missing_classes()
-
-    def _effective_classes_mode(self) -> str:
-        if self.state.image_folder:
-            overrides = self.state.overrides_for(self.state.image_folder)
-            value = overrides.get("classes_mode")
-            if value:
-                return value
-        return self.preferences.classes_mode or "auto"
-
-    def _maybe_prompt_missing_classes(self) -> None:
-        """If auto mode + labels configured but classes.txt is missing, ask once."""
-        if not self.state.image_folder:
-            return
-        if self.state.image_folder in self._classes_prompt_skipped:
-            return
-        if not self.show_bbox_action.isChecked():
-            return
-        if self._effective_classes_mode() != "auto":
-            return
-        if self.active_labels_dir is None:
-            return
-        if self.active_classes_path and self.active_classes_path.exists():
-            return
-
-        expected = self.active_classes_path or (self.active_labels_dir / "classes.txt")
-        box = QMessageBox(self)
-        box.setWindowTitle("classes.txt 未找到")
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setText(
-            f"在标签目录中未找到 classes.txt：\n  {expected}\n\n"
-            "继续将只在 BBox 上显示数字类别 ID。是否选择一个 classes.txt？"
-        )
-        pick_button = box.addButton("选择文件…", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("本次跳过", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-
-        if box.clickedButton() is pick_button:
-            path, _ = QFileDialog.getOpenFileName(
-                self,
-                "选择 classes.txt",
-                str(self.active_labels_dir),
-                "Text Files (*.txt);;All Files (*)",
-            )
-            if path:
-                self.state.update_overrides(
-                    self.state.image_folder,
-                    classes_mode="custom",
-                    classes_path=path,
-                )
-                self.active_classes_path = Path(path)
-                self._load_current_image(fit=False)
-                return
-        self._classes_prompt_skipped.add(self.state.image_folder)
 
     def toggle_operation_mode(self, checked: bool) -> None:
         self.operation_kind = OperationKind.MOVE if checked else OperationKind.COPY
@@ -871,7 +826,7 @@ class MainWindow(QMainWindow):
 
         output_dir = self.active_output_dir
         categories: list[tuple[str, str, str]] = []
-        for category in self.preferences.categories:
+        for category in self.active_categories:
             target = (
                 str(output_dir / category.folder_name)
                 if output_dir is not None
@@ -910,7 +865,7 @@ class MainWindow(QMainWindow):
             else ""
         )
         self.side_panel.refresh(
-            self.preferences.categories,
+            self.active_categories,
             str(self.active_output_dir or ""),
             self.classification_record,
             current_name,
@@ -957,7 +912,7 @@ class MainWindow(QMainWindow):
         if self.state.image_folder:
             self.state.update_overrides(
                 self.state.image_folder,
-                sort_strategy=self.active_sort_strategy,
+                sort_preset_id=self.active_sort_preset.id,
                 sort_descending=self.active_sort_descending,
                 conflict_strategy=self.active_conflict_strategy,
                 recursive_scan=self.active_recursive_scan,

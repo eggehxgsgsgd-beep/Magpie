@@ -1,17 +1,18 @@
-"""Per-project path resolution.
+"""Output-directory template resolution and one-shot legacy path migration.
 
-The :class:`Preferences` only stores global *templates* (e.g.
-``{parent}/{name}_filtered`` for the output directory, ``labels`` for the
-relative labels dir, ``auto`` / ``custom`` for ``classes.txt`` lookup).  The
-actual effective paths used while a folder is open are resolved at folder open
-time by the functions below, taking per-folder overrides from
-``AppState.per_folder_overrides`` into account.
+Labels and classes resolution now lives in ``preset_resolution.py``. This
+module keeps only:
 
-These functions are pure and Qt-free so they can be unit tested directly.
+- ``resolve_output_dir`` — renders the global output-dir template against a
+  source folder, honoring a per-folder ``output_dir`` override.
+- ``ProjectPathError`` — raised for malformed templates.
+- ``migrate_legacy_paths`` — startup helper that moves pre-1.x absolute path
+  fields into per-folder overrides on the currently-remembered folder.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .preferences import Preferences
@@ -23,19 +24,16 @@ class ProjectPathError(ValueError):
 
 
 def _resolve_path(value: str, folder: Path) -> Path:
-    """Expand ``~`` and resolve a path string relative to ``folder``.
-
-    Absolute paths are returned as-is (with ``~`` expanded). Relative paths
-    are joined under ``folder``.
-    """
+    """Expand ``~`` and resolve a path string relative to ``folder``."""
     candidate = Path(value).expanduser()
     if candidate.is_absolute():
         return candidate
-    return (folder / candidate).resolve() if folder else candidate
+    joined = (folder / candidate) if folder else candidate
+    return Path(os.path.normpath(str(joined)))
 
 
 def resolve_output_dir(
-    prefs: Preferences, overrides: dict, folder: Path
+    prefs: Preferences, overrides: dict | None, folder: Path
 ) -> Path:
     """Compute the effective output directory for ``folder``."""
     override = (overrides or {}).get("output_dir")
@@ -56,71 +54,22 @@ def resolve_output_dir(
         raise ProjectPathError(f"输出目录模板无效：{exc}") from exc
     if not rendered.strip():
         raise ProjectPathError("输出目录模板渲染为空字符串")
-    return Path(rendered).expanduser()
-
-
-def resolve_labels_dir(
-    prefs: Preferences, overrides: dict, folder: Path
-) -> Path | None:
-    """Compute the effective labels directory.
-
-    Returns ``None`` when no override and no global relative path is configured
-    — in that case BBox rendering is disabled.
-    """
-    override = (overrides or {}).get("labels_dir")
-    if override:
-        return _resolve_path(str(override), folder)
-
-    relative = (prefs.labels_dir_relative or "").strip()
-    if not relative:
-        return None
-    return _resolve_path(relative, folder)
-
-
-def resolve_classes_path(
-    prefs: Preferences, overrides: dict, labels_dir: Path | None
-) -> Path | None:
-    """Compute the effective ``classes.txt`` path.
-
-    Honors ``classes_mode`` (auto/custom) and the corresponding override or
-    global fields. In ``auto`` mode the returned path is
-    ``<labels_dir>/classes.txt`` *regardless* of whether that file exists; the
-    caller decides whether to warn the user about a missing file.
-    """
-    overrides = overrides or {}
-    mode = overrides.get("classes_mode") or prefs.classes_mode or "auto"
-
-    if mode == "custom":
-        raw = overrides.get("classes_path") or prefs.classes_path or ""
-        raw = str(raw).strip()
-        if not raw:
-            return None
-        return Path(raw).expanduser()
-
-    # auto
-    if labels_dir is None:
-        return None
-    return labels_dir / "classes.txt"
+    return Path(os.path.normpath(rendered)).expanduser()
 
 
 def migrate_legacy_paths(prefs: Preferences, state: AppState) -> bool:
     """Move legacy absolute paths from ``Preferences`` into per-folder overrides.
 
     Older Magpie versions stored ``source_dir``/``output_dir``/``labels_dir``/
-    ``classes_path`` as global absolute strings.  This function:
+    ``classes_path`` as global absolute strings. Those legacy fields are
+    captured by ``Preferences.from_dict`` into ``legacy_*`` attributes; this
+    function moves them into ``state.per_folder_overrides`` for the currently
+    remembered ``image_folder`` (if any) using the new ``preset:``/``path:``
+    encoding, then clears the legacy attributes.
 
-    1. Drops the (read-only / dead) ``source_dir``.
-    2. For each remaining legacy field that is non-empty, if ``state.image_folder``
-       is set, writes it as a per-folder override for that folder so re-opening
-       that folder still uses the old path.
-    3. Clears the ``legacy_*`` attributes on the Preferences instance so
-       subsequent ``to_dict()`` calls don't keep echoing them.
-
-    Returns ``True`` if any changes were made (the caller should persist
-    Preferences + AppState).
+    Returns ``True`` if any change was made (caller should persist).
     """
     changed = False
-
     folder = state.image_folder
 
     if prefs.legacy_output_dir:
@@ -131,22 +80,21 @@ def migrate_legacy_paths(prefs: Preferences, state: AppState) -> bool:
 
     if prefs.legacy_labels_dir:
         if folder:
-            state.update_overrides(folder, labels_dir=prefs.legacy_labels_dir)
+            state.update_overrides(
+                folder, labels_selection=f"path:{prefs.legacy_labels_dir}"
+            )
         prefs.legacy_labels_dir = ""
         changed = True
 
     if prefs.legacy_classes_path:
+        # Preferences-level migration already created an inline "legacy" preset
+        # by reading the file once; point the folder at it.
         if folder:
-            state.update_overrides(
-                folder,
-                classes_mode="custom",
-                classes_path=prefs.legacy_classes_path,
-            )
+            state.update_overrides(folder, classes_selection="preset:legacy")
         prefs.legacy_classes_path = ""
         changed = True
 
     if prefs.legacy_source_dir:
-        # Just drop it — no longer used anywhere.
         prefs.legacy_source_dir = ""
         changed = True
 

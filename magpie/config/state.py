@@ -8,42 +8,73 @@ from .paths import state_path
 
 
 _OVERRIDE_KEYS = (
-    "sort_strategy",
+    # path overrides
+    "output_dir",
+    # preset-based selections (encoded as "preset:<id>" / "path:<v>" / "none" / "auto")
+    "labels_selection",
+    "classes_selection",
+    # sort
+    "sort_preset_id",
     "sort_descending",
+    # behavior overrides
     "conflict_strategy",
     "recursive_scan",
     "current_index",
-    "output_dir",
-    "labels_dir",
-    "classes_mode",
-    "classes_path",
 )
 
 
-# Legacy combined values like "name_desc"/"mtime_asc"/"size_*" need splitting
-# into (sort_strategy=field, sort_descending=bool). Kept in sync with the
-# equivalent table in preferences.py.
+# Legacy combined values like "name_desc"/"mtime_asc"/"size_*" map to a
+# builtin sort preset id + descending flag. Used only at load time to migrate
+# old per_folder_overrides entries.
 _LEGACY_SORT_MIGRATION = {
-    "natural": ("natural", False),
-    "name_asc": ("name", False),
-    "name_desc": ("name", True),
-    "mtime_asc": ("mtime", False),
-    "mtime_desc": ("mtime", True),
-    "size_asc": ("name", False),
-    "size_desc": ("name", True),
+    "natural": ("builtin:natural", False),
+    "name": ("builtin:name", False),
+    "mtime": ("builtin:mtime", False),
+    "name_asc": ("builtin:name", False),
+    "name_desc": ("builtin:name", True),
+    "mtime_asc": ("builtin:mtime", False),
+    "mtime_desc": ("builtin:mtime", True),
+    "size_asc": ("builtin:name", False),
+    "size_desc": ("builtin:name", True),
 }
 
 
-def _migrate_override_sort(entry: dict) -> dict:
-    raw_field = entry.get("sort_strategy")
-    if not isinstance(raw_field, str):
-        return entry
-    if raw_field in _LEGACY_SORT_MIGRATION and "sort_descending" not in entry:
-        field, desc = _LEGACY_SORT_MIGRATION[raw_field]
-        entry = dict(entry)
-        entry["sort_strategy"] = field
-        entry["sort_descending"] = desc
-    return entry
+def _migrate_override_keys(entry: dict) -> dict:
+    """Translate legacy per-folder override keys to the new schema.
+
+    - ``sort_strategy`` (string) → ``sort_preset_id`` (+ ``sort_descending`` if combined)
+    - ``labels_dir`` → ``labels_selection`` as ``path:<value>``
+    - ``classes_mode`` + ``classes_path`` → ``classes_selection`` as ``preset:legacy`` (data not preserved)
+      or ``none``
+    """
+    out = dict(entry)
+
+    legacy_sort = out.pop("sort_strategy", None)
+    if isinstance(legacy_sort, str) and "sort_preset_id" not in out:
+        if legacy_sort in _LEGACY_SORT_MIGRATION:
+            preset_id, desc = _LEGACY_SORT_MIGRATION[legacy_sort]
+            out["sort_preset_id"] = preset_id
+            if "sort_descending" not in out:
+                out["sort_descending"] = desc
+        elif legacy_sort.startswith("custom:"):
+            out["sort_preset_id"] = legacy_sort.split(":", 1)[1]
+
+    legacy_labels = out.pop("labels_dir", None)
+    if isinstance(legacy_labels, str) and legacy_labels and "labels_selection" not in out:
+        out["labels_selection"] = f"path:{legacy_labels}"
+
+    legacy_classes_mode = out.pop("classes_mode", None)
+    legacy_classes_path = out.pop("classes_path", None)
+    if "classes_selection" not in out:
+        if legacy_classes_mode == "custom" and legacy_classes_path:
+            # Cannot read here without filesystem; preferences-level migration
+            # already created a "legacy" preset if applicable. Best effort.
+            out["classes_selection"] = "preset:legacy"
+        elif legacy_classes_mode == "auto":
+            # Auto mode is gone; users will recreate as a preset if needed.
+            out["classes_selection"] = "none"
+
+    return out
 
 
 @dataclass
@@ -69,7 +100,7 @@ class AppState:
                 for folder, entry in raw_overrides.items():
                     if not isinstance(entry, dict):
                         continue
-                    migrated = _migrate_override_sort(entry)
+                    migrated = _migrate_override_keys(entry)
                     overrides[str(folder)] = {
                         key: migrated[key] for key in _OVERRIDE_KEYS if key in migrated
                     }
