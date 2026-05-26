@@ -124,7 +124,7 @@ def main() -> int:
     args = parse_args()
     version = _resolve_version()
     name = f"Magpie-{version}-{args.target}"
-    print(f"[build] target={args.target} version={version} → {name}")
+    print(f"[build] target={args.target} version={version} -> {name}")
     entrypoint = ROOT / "magpie" / "ImageClassifierQt.py"
     icon_path = ROOT / "packaging" / "app.ico"
     separator = ";" if sys.platform.startswith("win") else ":"
