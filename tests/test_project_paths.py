@@ -79,10 +79,13 @@ def test_labels_override_path_wins(tmp_path: Path) -> None:
     prefs.labels_presets = [LabelsPreset(id="a", name="本地", path="labels")]
     prefs.default_labels_selection = "preset:a"
     folder = tmp_path / "cats"
+    # Use a tmp-path-derived absolute path so the test works on both POSIX
+    # (where "/abs/elsewhere" is absolute) and Windows (where it's not).
+    abs_override = tmp_path / "elsewhere"
     out = resolve_labels_dir(
-        prefs, {"labels_selection": "path:/abs/elsewhere"}, folder
+        prefs, {"labels_selection": f"path:{abs_override}"}, folder
     )
-    assert out == Path("/abs/elsewhere")
+    assert out == abs_override
 
 
 def test_labels_override_none(tmp_path: Path) -> None:
