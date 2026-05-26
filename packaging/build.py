@@ -48,6 +48,9 @@ EXCLUDED_PYQT6_MODULES = [
     # it explicitly to keep the dependency surface clean.
     "PyQt6.QtSql",
     "PyQt6.QtTextToSpeech",
+    "PyQt6.QtWebChannel",
+    "PyQt6.QtWebEngineCore",
+    "PyQt6.QtWebEngineWidgets",
     "PyQt6.QtWebSockets",
     "PyQt6.QtWebView",
 ]
@@ -123,14 +126,6 @@ def main() -> int:
         "PyQt6",
         "--collect-all",
         "PIL",
-        # QtWebEngine ships its own resources/locales/Chromium process binary;
-        # collect-all picks them up so the web view actually has assets to load.
-        "--collect-all",
-        "PyQt6.QtWebEngineCore",
-        "--collect-all",
-        "PyQt6.QtWebEngineWidgets",
-        "--collect-all",
-        "PyQt6.QtWebChannel",
         "--add-data",
         f"{ROOT / 'magpie' / 'resources'}{separator}magpie/resources",
     ]

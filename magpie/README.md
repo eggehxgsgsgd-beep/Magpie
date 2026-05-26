@@ -4,11 +4,9 @@ Magpie 是一个键盘驱动的本地图像分类桌面工具，适合数据清�
 
 ## 技术架构
 
-- UI 层：React + Babel Standalone（运行在 `QWebEngineView` 中的本地 HTML/JSX，资源位于
-  `magpie/resources/web/`）。
-- 后端：PyQt6 + Pillow，通过 `QWebChannel` 暴露文件夹扫描、图像加载、分类执行、
-  撤销/重做、偏好读写、冲突处理等接口（实现见 `magpie/ui/web_bridge.py`）。
-- React/Babel/qwebchannel.js 已离线打包到 `resources/web/vendor/`，应用无需联网即可工作。
+- UI 层：PyQt6 Widgets，主窗口、图像视图、首选项和侧边栏位于 `magpie/ui/`。
+- 核心层：`magpie/core/` 负责文件夹扫描、图像加载、BBox 绘制、分类执行和撤销/重做。
+- 配置层：`magpie/config/` 负责偏好、窗口状态和每个源目录的分类记录。
 
 ## 安装开发环境
 
