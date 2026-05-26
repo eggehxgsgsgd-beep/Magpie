@@ -355,6 +355,12 @@ class MainWindow(QMainWindow):
         result = dialog.result_overrides()
         if result is None:
             return
+
+        # Snapshot the effective sort before applying overrides, so we can
+        # detect a sort change and prompt the user.
+        prev_sort_id = self.active_sort_preset.id
+        prev_sort_desc = self.active_sort_descending
+
         # Clear preset-related override keys then re-apply only those the user
         # actually set (None = revert to global default).
         existing = dict(self.state.per_folder_overrides.get(self.state.image_folder, {}))
@@ -380,10 +386,67 @@ class MainWindow(QMainWindow):
             self.state.per_folder_overrides[self.state.image_folder] = existing
         else:
             self.state.per_folder_overrides.pop(self.state.image_folder, None)
-        # Re-open to apply the new resolved paths.
-        self.open_image_folder(self.state.image_folder, reset_index=False)
 
-    def open_image_folder(self, folder: str, reset_index: bool = True) -> None:
+        # Determine the new effective sort to compare.
+        new_overrides = self.state.overrides_for(self.state.image_folder)
+        new_sort_preset, new_sort_desc = resolve_active_sort(
+            self.preferences, new_overrides,
+        )
+        sort_changed = (
+            prev_sort_id != new_sort_preset.id or prev_sort_desc != new_sort_desc
+        )
+        mode = self._ask_sort_change_mode_if_needed(sort_changed)
+        self.open_image_folder(
+            self.state.image_folder, reset_index=False, sort_change_mode=mode,
+        )
+
+    def _ask_sort_change_mode_if_needed(self, sort_changed: bool) -> str | None:
+        """When sort actually changed AND the user has navigated past index 0,
+        pop a 2-button dialog and return ``"full"`` or ``"tail"``. Otherwise
+        return ``None`` (no special handling needed)."""
+        if not sort_changed:
+            return None
+        if self.current_index <= 0 or not self.image_files:
+            return None
+        prefix_count = self.current_index
+        tail_count = len(self.image_files) - self.current_index
+        box = QMessageBox(self)
+        box.setWindowTitle("排序方案已更改")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(
+            f"当前位置：第 {self.current_index + 1} 张（共 {len(self.image_files)}）。\n"
+            "新排序如何生效？"
+        )
+        full_btn = box.addButton(
+            "从头开始（重排全部）", QMessageBox.ButtonRole.AcceptRole
+        )
+        tail_btn = box.addButton(
+            f"保留前 {prefix_count} 张不动（仅重排剩余 {tail_count} 张）",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        box.setDefaultButton(tail_btn)
+        box.exec()
+        if box.clickedButton() is full_btn:
+            return "full"
+        return "tail"
+
+    def open_image_folder(
+        self,
+        folder: str,
+        reset_index: bool = True,
+        sort_change_mode: str | None = None,
+    ) -> None:
+        """Open ``folder`` and refresh the image list.
+
+        ``sort_change_mode`` is only used when reloading the *same* folder
+        after the user changed the active sort preset:
+        - ``"full"`` — re-sort everything, cursor → 0.
+        - ``"tail"`` — keep ``image_files[0:current_index]`` (the prefix the
+          user has already paged past) in the OLD order; only re-sort what
+          comes after. Cursor stays at the boundary.
+
+        When ``sort_change_mode`` is set, ``reset_index`` is ignored.
+        """
         folder_path = Path(folder)
         if not folder_path.is_dir():
             QMessageBox.warning(self, "打开失败", f"{folder} 不是有效文件夹")
@@ -391,6 +454,13 @@ class MainWindow(QMainWindow):
 
         folder_key = str(folder_path)
         overrides = self.state.overrides_for(folder_key)
+
+        # Snapshot the existing prefix BEFORE we touch image_files. Used
+        # only when sort_change_mode == "tail" and we're reopening the
+        # SAME folder.
+        prefix_names: list[str] = []
+        if sort_change_mode == "tail" and folder_key == self.state.image_folder:
+            prefix_names = [p.name for p in self.image_files[: self.current_index]]
 
         # Resolve active sort preset (built-in or custom) + descending flag.
         self.active_sort_preset, self.active_sort_descending = resolve_active_sort(
@@ -411,7 +481,7 @@ class MainWindow(QMainWindow):
             if recursive is None:
                 recursive = self._resolve_recursive_scan(folder_path)
             self.active_recursive_scan = recursive
-            self.image_files = list_image_files(
+            scanned = list_image_files(
                 folder_path,
                 self.preferences.file_extensions,
                 self.active_sort_preset,
@@ -431,7 +501,7 @@ class MainWindow(QMainWindow):
                 field=BUILTIN_SORT_PRESETS[0].field,
             )
             self.active_sort_descending = False
-            self.image_files = list_image_files(
+            scanned = list_image_files(
                 folder_path,
                 self.preferences.file_extensions,
                 self.active_sort_preset,
@@ -440,6 +510,16 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "打开失败", f"读取图片文件夹失败：{exc}")
             return
+
+        # Splice the kept prefix in front (tail mode), else replace wholesale.
+        if sort_change_mode == "tail" and prefix_names:
+            name_to_path = {p.name: p for p in scanned}
+            kept_prefix = [name_to_path[n] for n in prefix_names if n in name_to_path]
+            visited_set = set(prefix_names)
+            new_tail = [p for p in scanned if p.name not in visited_set]
+            self.image_files = kept_prefix + new_tail
+        else:
+            self.image_files = scanned
 
         self.state.image_folder = folder_key
         self.state.add_recent_folder(folder_key)
@@ -466,7 +546,13 @@ class MainWindow(QMainWindow):
         self.batch_conflict_strategy = None
         self.side_panel.clear_recent_operations()
 
-        if reset_index:
+        if sort_change_mode == "tail":
+            # Cursor sits at the boundary between kept prefix and new tail.
+            boundary = len(prefix_names)
+            self.current_index = max(0, min(boundary, max(len(self.image_files) - 1, 0)))
+        elif sort_change_mode == "full":
+            self.current_index = 0
+        elif reset_index:
             saved_index = int(overrides.get("current_index", 0))
             self.current_index = max(0, min(saved_index, max(len(self.image_files) - 1, 0)))
         else:
@@ -754,6 +840,8 @@ class MainWindow(QMainWindow):
         self._update_action_states()
 
     def open_preferences(self) -> None:
+        prev_sort_id = self.active_sort_preset.id
+        prev_sort_desc = self.active_sort_descending
         dialog = PreferencesDialog(self.preferences, self)
         if dialog.exec():
             self.preferences = dialog.preferences
@@ -765,9 +853,23 @@ class MainWindow(QMainWindow):
             self._refresh_side_panel()
             self._register_category_shortcuts()
             if self.state.image_folder:
-                # open_image_folder will re-resolve active_* paths and re-create
-                # the per-category output subdirs with the new template.
-                self.open_image_folder(self.state.image_folder, reset_index=False)
+                # Detect a sort change before triggering the reload, so the
+                # user can opt into "freeze prefix" if they've already worked
+                # past index 0.
+                new_overrides = self.state.overrides_for(self.state.image_folder)
+                new_sort_preset, new_sort_desc = resolve_active_sort(
+                    self.preferences, new_overrides,
+                )
+                sort_changed = (
+                    prev_sort_id != new_sort_preset.id
+                    or prev_sort_desc != new_sort_desc
+                )
+                mode = self._ask_sort_change_mode_if_needed(sort_changed)
+                self.open_image_folder(
+                    self.state.image_folder,
+                    reset_index=False,
+                    sort_change_mode=mode,
+                )
             else:
                 self.active_sort_preset, self.active_sort_descending = resolve_active_sort(
                     self.preferences, None
