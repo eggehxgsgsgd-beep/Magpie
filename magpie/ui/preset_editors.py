@@ -1,11 +1,13 @@
 """Dialog editors for category / labels / classes presets.
 
-Sort presets are edited via ``CustomSortPresetEditor`` already living in
-``preferences_dialog.py``; this module covers the three new preset kinds.
+Sort presets are edited via ``CustomSortPresetEditor`` in
+``preferences_dialog.py``; this module covers the other three:
 
-Categories are intentionally edited *inline* in the 类别 tab (the category
-table reacts to selection in the preset list). The ``CategoryPresetEditor``
-here only handles **naming**: new preset + rename.
+- ``CategoryPresetEditor`` — name + full category table (shortcut/folder/
+  display/color, drag-reorder, conflict highlight). Uses ``CategoryTableWidget``.
+- ``LabelsPresetEditor`` — name + a relative path (typed; no directory
+  picker, since the value is conceptually a relative-to-source path).
+- ``ClassesPresetEditor`` — name + multi-line names (one per line, paste-style).
 """
 
 from __future__ import annotations
@@ -17,13 +19,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QFileDialog,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -128,18 +127,20 @@ class LabelsPresetEditor(QDialog):
         self.name_edit.setPlaceholderText("如：本地 · 共享标注")
         form.addRow("方案名称", self.name_edit)
 
-        path_row = QHBoxLayout()
-        path_row.setSpacing(6)
         self.path_edit = QLineEdit(preset.path if preset else "")
-        self.path_edit.setPlaceholderText("labels  或  ../shared/labels  或  /abs/path")
+        self.path_edit.setPlaceholderText("labels  或  ../shared/labels")
         self.path_edit.textChanged.connect(self._refresh_preview)
-        path_row.addWidget(self.path_edit, stretch=1)
-        browse = QPushButton("选择…")
-        browse.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        browse.clicked.connect(self._on_browse)
-        path_row.addWidget(browse)
-        form.addRow("路径", path_row)
+        form.addRow("相对路径", self.path_edit)
         layout.addLayout(form)
+
+        path_hint = QLabel(
+            "相对源目录的路径。例如 <code>labels</code> 表示源目录下的 labels 子目录，"
+            "<code>../shared/labels</code> 表示源目录同级的 shared/labels。"
+        )
+        path_hint.setTextFormat(Qt.TextFormat.RichText)
+        path_hint.setStyleSheet("color: #6b7280; font-size: 11px;")
+        path_hint.setWordWrap(True)
+        layout.addWidget(path_hint)
 
         self.preview_label = QLabel("")
         self.preview_label.setStyleSheet("color: #6b7280; font-size: 11px;")
@@ -169,18 +170,14 @@ class LabelsPresetEditor(QDialog):
         if not raw:
             self.preview_label.setText("（留空表示不加载标签）")
             return
+        # Path/-with-absolute or ~ still gets handled by the runtime resolver;
+        # match its behavior here so the preview never lies.
         p = Path(raw).expanduser()
         joined = p if p.is_absolute() else (self._preview_folder / p)
         normalized = os.path.normpath(str(joined))
         self.preview_label.setText(
             f"预览：{self._preview_folder} → <code>{normalized}</code>"
         )
-
-    def _on_browse(self) -> None:
-        start = self.path_edit.text() or str(self._preview_folder)
-        chosen = QFileDialog.getExistingDirectory(self, "选择标签目录", start)
-        if chosen:
-            self.path_edit.setText(chosen)
 
     def _on_accept(self) -> None:
         name = self.name_edit.text().strip()
