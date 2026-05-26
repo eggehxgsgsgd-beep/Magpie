@@ -9,7 +9,7 @@ from pathlib import Path
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
-from magpie.config import log_dir
+from magpie.config import AppState, Preferences, log_dir, migrate_legacy_paths
 from magpie.ui import MainWindow
 from magpie.ui.style import apply_app_style
 
@@ -59,7 +59,17 @@ def main(argv: list[str] | None = None) -> int:
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    window = MainWindow()
+    # Load preferences + state, then run one-off legacy path migration before
+    # the main window touches anything. This moves any pre-1.x absolute paths
+    # (output_dir / labels_dir / classes_path) into per-folder overrides on the
+    # currently-remembered image folder, so old users don't lose their config.
+    preferences = Preferences.load()
+    state = AppState.load()
+    if migrate_legacy_paths(preferences, state):
+        preferences.save()
+        state.save()
+
+    window = MainWindow(preferences=preferences, state=state)
     if args.path:
         window.open_image_folder(args.path)
     window.show()

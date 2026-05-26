@@ -7,6 +7,45 @@ from pathlib import Path
 from .paths import state_path
 
 
+_OVERRIDE_KEYS = (
+    "sort_strategy",
+    "sort_descending",
+    "conflict_strategy",
+    "recursive_scan",
+    "current_index",
+    "output_dir",
+    "labels_dir",
+    "classes_mode",
+    "classes_path",
+)
+
+
+# Legacy combined values like "name_desc"/"mtime_asc"/"size_*" need splitting
+# into (sort_strategy=field, sort_descending=bool). Kept in sync with the
+# equivalent table in preferences.py.
+_LEGACY_SORT_MIGRATION = {
+    "natural": ("natural", False),
+    "name_asc": ("name", False),
+    "name_desc": ("name", True),
+    "mtime_asc": ("mtime", False),
+    "mtime_desc": ("mtime", True),
+    "size_asc": ("name", False),
+    "size_desc": ("name", True),
+}
+
+
+def _migrate_override_sort(entry: dict) -> dict:
+    raw_field = entry.get("sort_strategy")
+    if not isinstance(raw_field, str):
+        return entry
+    if raw_field in _LEGACY_SORT_MIGRATION and "sort_descending" not in entry:
+        field, desc = _LEGACY_SORT_MIGRATION[raw_field]
+        entry = dict(entry)
+        entry["sort_strategy"] = field
+        entry["sort_descending"] = desc
+    return entry
+
+
 @dataclass
 class AppState:
     image_folder: str = ""
@@ -14,6 +53,7 @@ class AppState:
     recent_folders: list[str] = field(default_factory=list)
     geometry_hex: str = ""
     window_state_hex: str = ""
+    per_folder_overrides: dict[str, dict] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppState":
@@ -23,12 +63,23 @@ class AppState:
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            raw_overrides = data.get("per_folder_overrides", {}) or {}
+            overrides: dict[str, dict] = {}
+            if isinstance(raw_overrides, dict):
+                for folder, entry in raw_overrides.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    migrated = _migrate_override_sort(entry)
+                    overrides[str(folder)] = {
+                        key: migrated[key] for key in _OVERRIDE_KEYS if key in migrated
+                    }
             return cls(
                 image_folder=str(data.get("image_folder", "")),
                 current_index=int(data.get("current_index", 0)),
                 recent_folders=list(data.get("recent_folders", [])),
                 geometry_hex=str(data.get("geometry_hex", "")),
                 window_state_hex=str(data.get("window_state_hex", "")),
+                per_folder_overrides=overrides,
             )
         except Exception as exc:
             print(f"Failed to load state, using defaults: {exc}")
@@ -45,6 +96,7 @@ class AppState:
                     "recent_folders": self.recent_folders[:10],
                     "geometry_hex": self.geometry_hex,
                     "window_state_hex": self.window_state_hex,
+                    "per_folder_overrides": self.per_folder_overrides,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -56,3 +108,23 @@ class AppState:
         self.recent_folders = [item for item in self.recent_folders if item != folder]
         self.recent_folders.insert(0, folder)
         self.recent_folders = self.recent_folders[:10]
+
+    def overrides_for(self, folder: str) -> dict:
+        return dict(self.per_folder_overrides.get(folder, {}))
+
+    def update_overrides(self, folder: str, **values) -> None:
+        if not folder:
+            return
+        entry = dict(self.per_folder_overrides.get(folder, {}))
+        for key, value in values.items():
+            if key not in _OVERRIDE_KEYS or value is None:
+                continue
+            entry[key] = value
+        if entry:
+            self.per_folder_overrides[folder] = entry
+        # Prune overrides for folders no longer in recent list, keep cap at 32.
+        if len(self.per_folder_overrides) > 32:
+            allowed = set(self.recent_folders) | {folder}
+            self.per_folder_overrides = {
+                key: val for key, val in self.per_folder_overrides.items() if key in allowed
+            }

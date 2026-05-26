@@ -42,51 +42,41 @@ QStatusBar {
 }
 
 QLabel#imageNameLabel {
-    font-size: 14px;
-    color: #333333;
+    font-size: 12px;
+    color: #6b7280;
+    padding: 2px 0;
 }
 
 QLabel#indexLabel {
-    font-size: 14px;
-    color: #222222;
-}
-
-QLabel#pathLabel,
-QLabel#messageLabel {
     font-size: 12px;
-    color: #666666;
+    color: #1f2937;
+    font-weight: 600;
+    padding: 0 8px;
 }
 
-QPushButton#copyNameButton {
-    background: #4caf50;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    padding: 5px 12px;
+QLabel#pathLabel {
+    font-size: 12px;
+    color: #6b7280;
+    padding: 0 6px;
 }
 
-QPushButton#copyNameButton:hover {
-    background: #45a049;
+QLabel#countsLabel {
+    font-size: 12px;
+    color: #1f2937;
+    padding: 0 8px;
 }
 
-QPushButton#copyNameButton:disabled {
-    background: #bdbdbd;
+QProgressBar#statusProgressBar {
+    border: 1px solid #d4d8df;
+    border-radius: 3px;
+    background: #ffffff;
+    text-align: center;
+    height: 14px;
 }
 
-QPushButton#jumpButton {
-    background: #2196f3;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    padding: 5px;
-}
-
-QPushButton#jumpButton:hover {
-    background: #1976d2;
-}
-
-QPushButton#jumpButton:disabled {
-    background: #bdbdbd;
+QProgressBar#statusProgressBar::chunk {
+    background: #3b82f6;
+    border-radius: 2px;
 }
 """
 

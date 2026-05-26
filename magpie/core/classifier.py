@@ -83,12 +83,3 @@ def undo_operation(operation: Operation) -> None:
             shutil.move(str(operation.target_path), str(operation.source_path))
     elif operation.target_path.exists():
         operation.target_path.unlink()
-
-
-def redo_operation(operation: Operation) -> None:
-    operation.target_path.parent.mkdir(parents=True, exist_ok=True)
-    if operation.kind == OperationKind.MOVE:
-        if operation.source_path.exists():
-            shutil.move(str(operation.source_path), str(operation.target_path))
-    elif operation.source_path.exists():
-        shutil.copy2(operation.source_path, operation.target_path)

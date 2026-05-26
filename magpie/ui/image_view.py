@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView
 
@@ -11,6 +11,7 @@ class ImageView(QGraphicsView):
     previousRequested = pyqtSignal()
     nextRequested = pyqtSignal()
     autoplayRequested = pyqtSignal()
+    contextMenuRequested = pyqtSignal(QPoint)  # global pos
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,6 +43,9 @@ class ImageView(QGraphicsView):
         self.setStyleSheet("QGraphicsView { border: 1px solid #dddddd; border-radius: 4px; }")
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self._badge_dimmed = False
 
     def set_pixmap(self, pixmap: QPixmap, fit: bool = True) -> None:
         self.pixmap_item.setPixmap(pixmap)
@@ -105,12 +109,43 @@ class ImageView(QGraphicsView):
             return
         super().keyPressEvent(event)
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.RightButton:
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and not self.pixmap_item.pixmap().isNull():
             self.fit_to_window()
             self.fitRequested.emit()
+            event.accept()
             return
-        super().mousePressEvent(event)
+        super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        self.contextMenuRequested.emit(event.globalPos())
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        self._update_badge_dim(event.position().toPoint())
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._set_badge_dim(False)
+        super().leaveEvent(event)
+
+    def _update_badge_dim(self, pos) -> None:
+        if not self.badge_bg.isVisible():
+            return
+        viewport = self.viewport()
+        if viewport is None:
+            return
+        # Dim when cursor is near the top-left corner where the badge sits.
+        dim = pos.x() < viewport.width() // 2 and pos.y() < viewport.height() // 2
+        self._set_badge_dim(dim)
+
+    def _set_badge_dim(self, dim: bool) -> None:
+        if dim == self._badge_dimmed:
+            return
+        self._badge_dimmed = dim
+        opacity = 0.2 if dim else 1.0
+        self.badge_bg.setOpacity(opacity)
+        self.badge_text.setOpacity(opacity)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():

@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, Qt, QTimer
-from PyQt6.QtGui import QAction, QKeyEvent, QKeySequence, QShortcut
+from PyQt6.QtCore import QByteArray, QPoint, Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFontMetrics, QKeyEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -12,15 +12,25 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
-    QPushButton,
+    QProgressBar,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from magpie.config import AppState, ClassificationRecord, Preferences
+from magpie.config import (
+    AppState,
+    ClassificationRecord,
+    Preferences,
+    ProjectPathError,
+    resolve_classes_path,
+    resolve_labels_dir,
+    resolve_output_dir,
+)
 from magpie.core import (
+    CustomSortError,
     OperationHistory,
     classify_image,
     draw_bboxes_on_pixmap,
@@ -30,7 +40,6 @@ from magpie.core import (
     load_class_names,
     load_pixmap,
     load_yolo_labels,
-    redo_operation,
     resolve_target_path,
     undo_operation,
 )
@@ -38,6 +47,8 @@ from magpie.models import Category, OperationKind
 from magpie.ui.conflict_dialog import ConflictDialog
 from magpie.ui.image_view import ImageView
 from magpie.ui.preferences_dialog import PreferencesDialog
+from magpie.ui.project_settings_dialog import ProjectSettingsDialog
+from magpie.ui.shortcuts_dialog import ShortcutsDialog
 from magpie.ui.side_panel import SidePanel
 
 
@@ -47,6 +58,35 @@ class StatusProxy:
 
     def showMessage(self, message: str, timeout: int = 0) -> None:
         self.window.set_message(message, timeout)
+
+
+class ElidedLabel(QLabel):
+    """QLabel that elides its text in the middle to fit the available width."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setMinimumWidth(80)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        self._full_text = text or ""
+        self.setToolTip(self._full_text if self._full_text else "")
+        self._update_elided()
+
+    def fullText(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_elided()
+
+    def _update_elided(self) -> None:
+        metrics: QFontMetrics = self.fontMetrics()
+        available = max(0, self.width() - 4)
+        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideMiddle, available)
+        super().setText(elided)
 
 
 class MainWindow(QMainWindow):
@@ -62,6 +102,17 @@ class MainWindow(QMainWindow):
         self.class_names: list[str] = []
         self.classification_record: ClassificationRecord | None = None
         self.remembered_conflict_strategy: str | None = None
+        self.batch_conflict_strategy: str | None = None
+        self.active_sort_strategy: str = self.preferences.sort_strategy
+        self.active_sort_descending: bool = self.preferences.sort_descending
+        self.active_conflict_strategy: str = self.preferences.conflict_strategy
+        self.active_recursive_scan: bool = self.preferences.recursive_scan
+        self.active_output_dir: Path | None = None
+        self.active_labels_dir: Path | None = None
+        self.active_classes_path: Path | None = None
+        # Session-level set of folder keys where the user has already chosen to
+        # skip the "classes.txt missing" prompt; cleared on app restart.
+        self._classes_prompt_skipped: set[str] = set()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_image)
@@ -70,6 +121,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
         self.setMinimumSize(960, 600)
         self._create_ui()
+        self._create_status_bar()
         self._create_actions()
         self._create_menus()
         self._register_category_shortcuts()
@@ -85,12 +137,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QHBoxLayout(central_widget)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(12, 12, 12, 12)
 
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setSpacing(10)
+        left_layout.setSpacing(6)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.image_view = ImageView()
@@ -99,6 +151,7 @@ class MainWindow(QMainWindow):
         self.image_view.previousRequested.connect(self.previous_image)
         self.image_view.nextRequested.connect(self.next_image)
         self.image_view.autoplayRequested.connect(lambda: self.autoplay_action.trigger())
+        self.image_view.contextMenuRequested.connect(self._show_image_context_menu)
         left_layout.addWidget(self.image_view, stretch=1)
 
         self.image_name_label = QLabel("")
@@ -106,65 +159,51 @@ class MainWindow(QMainWindow):
         self.image_name_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         left_layout.addWidget(self.image_name_label)
 
-        image_action_row = QHBoxLayout()
-        self.copy_name_button = QPushButton("复制图片名称")
-        self.copy_name_button.setObjectName("copyNameButton")
-        self.copy_name_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.copy_name_button.clicked.connect(self.copy_image_name)
-        self.copy_name_button.setEnabled(False)
-        image_action_row.addWidget(self.copy_name_button)
-        image_action_row.addStretch()
-        left_layout.addLayout(image_action_row)
-
-        status_row = QHBoxLayout()
-        status_row.setSpacing(15)
-        self.jump_button = QPushButton("跳转")
-        self.jump_button.setObjectName("jumpButton")
-        self.jump_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.jump_button.clicked.connect(self.jump_to_image)
-        self.jump_button.setFixedWidth(80)
-        self.jump_button.setEnabled(False)
-        self.index_label = QLabel("0 / 0")
-        self.index_label.setObjectName("indexLabel")
-        self.path_label = QLabel("")
-        self.path_label.setObjectName("pathLabel")
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.path_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.message_label = QLabel("")
-        self.message_label.setObjectName("messageLabel")
-        status_row.addWidget(self.jump_button)
-        status_row.addWidget(self.index_label)
-        status_row.addWidget(self.path_label, stretch=1)
-        status_row.addWidget(self.message_label)
-        left_layout.addLayout(status_row)
-
         self.side_panel = SidePanel()
         self.side_panel.undoRequested.connect(self.undo)
+        self.side_panel.classifyRequested.connect(self.classify_current_image)
 
         main_layout.addWidget(left_panel, stretch=7)
         main_layout.addWidget(self.side_panel)
 
-        self.status = StatusProxy(self)
-        self.message_timer = QTimer(self)
-        self.message_timer.setSingleShot(True)
-        self.message_timer.timeout.connect(lambda: self.message_label.setText(""))
         self.image_view.setFocus()
         self._refresh_side_panel()
 
+    def _create_status_bar(self) -> None:
+        status_bar = self.statusBar()
+        status_bar.setSizeGripEnabled(False)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("statusProgressBar")
+        self.progress_bar.setFixedWidth(140)
+        self.progress_bar.setVisible(False)
+        status_bar.addWidget(self.progress_bar)
+
+        self.index_label = QLabel("0 / 0")
+        self.index_label.setObjectName("indexLabel")
+        status_bar.addPermanentWidget(self.index_label)
+
+        self.path_label = ElidedLabel()
+        self.path_label.setObjectName("pathLabel")
+        status_bar.addPermanentWidget(self.path_label, 1)
+
+        self.status = StatusProxy(self)
+
     def set_message(self, message: str, timeout: int = 0) -> None:
-        self.message_label.setText(message)
-        if timeout > 0:
-            self.message_timer.start(timeout)
-        else:
-            self.message_timer.stop()
+        bar = self.statusBar()
+        if not message:
+            bar.clearMessage()
+            return
+        bar.showMessage(message, timeout if timeout > 0 else 0)
 
     def _create_actions(self) -> None:
         self.open_folder_action = QAction("打开图片文件夹", self)
         self.open_folder_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         self.open_folder_action.triggered.connect(self.choose_image_folder)
 
-        self.open_labels_action = QAction("打开标签目录", self)
-        self.open_labels_action.triggered.connect(self.choose_labels_folder)
+        self.project_settings_action = QAction("本目录设置…", self)
+        self.project_settings_action.triggered.connect(self.open_project_settings)
+        self.project_settings_action.setEnabled(False)
 
         self.exit_action = QAction("退出", self)
         self.exit_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Quit))
@@ -191,10 +230,6 @@ class MainWindow(QMainWindow):
         self.undo_action = QAction("撤销", self)
         self.undo_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Undo))
         self.undo_action.triggered.connect(self.undo)
-
-        self.redo_action = QAction("重做", self)
-        self.redo_action.setShortcuts([QKeySequence(QKeySequence.StandardKey.Redo), QKeySequence("Ctrl+Shift+Z")])
-        self.redo_action.triggered.connect(self.redo)
 
         self.preferences_action = QAction("首选项", self)
         self.preferences_action.setShortcut(QKeySequence("Ctrl+,"))
@@ -233,48 +268,43 @@ class MainWindow(QMainWindow):
         self.about_action = QAction("关于", self)
         self.about_action.triggered.connect(self.show_about)
 
-        self.update_action = QAction("检查更新", self)
-        self.update_action.triggered.connect(lambda: self.status.showMessage("当前版本暂不支持自动检查更新", 3000))
-
         self._update_action_states()
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("文件")
         file_menu.addAction(self.open_folder_action)
-        file_menu.addAction(self.open_labels_action)
         self.recent_menu = file_menu.addMenu("最近打开")
         self._refresh_recent_menu()
         file_menu.addSeparator()
+        file_menu.addAction(self.preferences_action)
+        file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
 
-        edit_menu = self.menuBar().addMenu("编辑")
-        edit_menu.addAction(self.undo_action)
-        edit_menu.addAction(self.redo_action)
-        edit_menu.addAction(self.copy_name_action)
-        edit_menu.addSeparator()
-        edit_menu.addAction(self.preferences_action)
+        browse_menu = self.menuBar().addMenu("浏览")
+        browse_menu.addAction(self.previous_action)
+        browse_menu.addAction(self.next_action)
+        browse_menu.addAction(self.autoplay_action)
+        browse_menu.addAction(self.jump_action)
+        browse_menu.addSeparator()
+        browse_menu.addAction(self.fit_action)
+        browse_menu.addAction(self.actual_size_action)
+        browse_menu.addAction(self.zoom_in_action)
+        browse_menu.addAction(self.zoom_out_action)
+        browse_menu.addSeparator()
+        browse_menu.addAction(self.show_bbox_action)
 
-        view_menu = self.menuBar().addMenu("视图")
-        view_menu.addAction(self.previous_action)
-        view_menu.addAction(self.next_action)
-        view_menu.addAction(self.autoplay_action)
-        view_menu.addAction(self.jump_action)
-        view_menu.addSeparator()
-        view_menu.addAction(self.fit_action)
-        view_menu.addAction(self.actual_size_action)
-        view_menu.addAction(self.zoom_in_action)
-        view_menu.addAction(self.zoom_out_action)
-        view_menu.addAction(self.show_bbox_action)
-
-        operation_menu = self.menuBar().addMenu("操作")
-        operation_menu.addAction(self.mode_action)
-        clear_record_action = operation_menu.addAction("清除本文件夹的分类记录")
+        classify_menu = self.menuBar().addMenu("分类")
+        classify_menu.addAction(self.undo_action)
+        classify_menu.addSeparator()
+        classify_menu.addAction(self.mode_action)
+        classify_menu.addSeparator()
+        classify_menu.addAction(self.project_settings_action)
+        clear_record_action = classify_menu.addAction("清除本目录分类记录")
         clear_record_action.triggered.connect(self.clear_current_classification_record)
 
         help_menu = self.menuBar().addMenu("帮助")
         help_menu.addAction(self.shortcuts_action)
         help_menu.addAction(self.about_action)
-        help_menu.addAction(self.update_action)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Left:
@@ -309,17 +339,41 @@ class MainWindow(QMainWindow):
             self.restoreState(QByteArray.fromHex(self.state.window_state_hex.encode("ascii")))
 
     def choose_image_folder(self) -> None:
-        default_dir = self.preferences.source_dir or self.state.image_folder
+        default_dir = self.state.image_folder or str(Path.home())
         folder = QFileDialog.getExistingDirectory(self, "选择图片文件夹", default_dir)
         if folder:
             self.open_image_folder(folder)
 
-    def choose_labels_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "选择标签目录", self.preferences.labels_dir)
-        if folder:
-            self.preferences.labels_dir = folder
-            self.preferences.save()
-            self._load_current_image(fit=False)
+    def open_project_settings(self) -> None:
+        if not self.state.image_folder:
+            return
+        folder_path = Path(self.state.image_folder)
+        overrides = self.state.overrides_for(self.state.image_folder)
+        dialog = ProjectSettingsDialog(folder_path, self.preferences, overrides, self)
+        if not dialog.exec():
+            return
+        result = dialog.result_overrides()
+        if result is None:
+            return
+        # Clear then re-apply.  update_overrides ignores empty strings, but we
+        # need to drop keys that the user reverted to defaults — do it by hand.
+        existing = dict(self.state.per_folder_overrides.get(self.state.image_folder, {}))
+        for key in ("output_dir", "labels_dir", "classes_mode", "classes_path"):
+            existing.pop(key, None)
+        for key, value in {
+            "output_dir": result.output_dir,
+            "labels_dir": result.labels_dir,
+            "classes_mode": result.classes_mode,
+            "classes_path": result.classes_path,
+        }.items():
+            if value:
+                existing[key] = value
+        if existing:
+            self.state.per_folder_overrides[self.state.image_folder] = existing
+        else:
+            self.state.per_folder_overrides.pop(self.state.image_folder, None)
+        # Re-open to apply the new resolved paths.
+        self.open_image_folder(self.state.image_folder, reset_index=False)
 
     def open_image_folder(self, folder: str, reset_index: bool = True) -> None:
         folder_path = Path(folder)
@@ -327,27 +381,80 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "打开失败", f"{folder} 不是有效文件夹")
             return
 
+        folder_key = str(folder_path)
+        overrides = self.state.overrides_for(folder_key)
+        self.active_sort_strategy = overrides.get("sort_strategy", self.preferences.sort_strategy)
+        self.active_sort_descending = bool(
+            overrides.get("sort_descending", self.preferences.sort_descending)
+        )
+        self.active_conflict_strategy = overrides.get(
+            "conflict_strategy", self.preferences.conflict_strategy
+        )
+        if "recursive_scan" in overrides:
+            recursive = bool(overrides["recursive_scan"])
+        else:
+            recursive = None  # decided below
+
         try:
-            recursive = self._resolve_recursive_scan(folder_path)
+            if recursive is None:
+                recursive = self._resolve_recursive_scan(folder_path)
+            self.active_recursive_scan = recursive
             self.image_files = list_image_files(
                 folder_path,
                 self.preferences.file_extensions,
-                self.preferences.sort_strategy,
+                self.active_sort_strategy,
+                recursive=recursive,
+                custom_sort_presets=self.preferences.custom_sort_presets,
+                sort_descending=self.active_sort_descending,
+            )
+        except CustomSortError as exc:
+            QMessageBox.warning(
+                self,
+                "自定义排序失败",
+                f"{exc}\n\n请到 文件 → 首选项 → 扫描与写入 修改表达式，已临时回退为自然排序。",
+            )
+            self.active_sort_strategy = "natural"
+            self.active_sort_descending = False
+            self.image_files = list_image_files(
+                folder_path,
+                self.preferences.file_extensions,
+                "natural",
                 recursive=recursive,
             )
         except Exception as exc:
             QMessageBox.warning(self, "打开失败", f"读取图片文件夹失败：{exc}")
             return
 
-        self.state.image_folder = str(folder_path)
-        self.state.add_recent_folder(str(folder_path))
+        self.state.image_folder = folder_key
+        self.state.add_recent_folder(folder_key)
         self.classification_record = ClassificationRecord.load(folder_path)
         self._refresh_recent_menu()
-        ensure_category_folders(self.preferences.output_dir, self.preferences.categories)
+
+        # Resolve effective project paths (output / labels / classes).
+        used_default_output = "output_dir" not in overrides
+        try:
+            self.active_output_dir = resolve_output_dir(self.preferences, overrides, folder_path)
+        except ProjectPathError as exc:
+            QMessageBox.warning(
+                self,
+                "输出目录模板错误",
+                f"{exc}\n请在 文件 → 首选项 → 目录 修改模板，或用「分类 → 本目录设置」指定输出目录。",
+            )
+            self.active_output_dir = folder_path.parent / f"{folder_path.name}_filtered"
+        self.active_labels_dir = resolve_labels_dir(self.preferences, overrides, folder_path)
+        self.active_classes_path = resolve_classes_path(
+            self.preferences, overrides, self.active_labels_dir
+        )
+
+        ensure_category_folders(self.active_output_dir, self.preferences.categories)
         self.history.clear()
+        self.remembered_conflict_strategy = None
+        self.batch_conflict_strategy = None
+        self.side_panel.clear_recent_operations()
 
         if reset_index:
-            self.current_index = 0
+            saved_index = int(overrides.get("current_index", 0))
+            self.current_index = max(0, min(saved_index, max(len(self.image_files) - 1, 0)))
         else:
             self.current_index = min(self.current_index, max(len(self.image_files) - 1, 0))
 
@@ -358,6 +465,17 @@ class MainWindow(QMainWindow):
 
         self._refresh_side_panel()
         self._update_action_states()
+
+        # First-time hint when the output dir comes from the template.
+        if used_default_output:
+            self.status.showMessage(
+                f"默认输出 → {self.active_output_dir}（分类 → 本目录设置 可修改）",
+                5000,
+            )
+
+        # Check whether classes.txt is missing and prompt the user once per
+        # session per folder (auto mode only; BBox display must be on).
+        self._maybe_prompt_missing_classes()
 
     def _resolve_recursive_scan(self, folder_path: Path) -> bool:
         if self.preferences.remember_recursive_scan:
@@ -394,10 +512,15 @@ class MainWindow(QMainWindow):
         image_path = self.image_files[self.current_index]
         try:
             pixmap = load_pixmap(image_path)
-            if self.show_bbox_action.isChecked() and self.preferences.labels_dir:
-                boxes = load_yolo_labels(label_path_for_image(self.preferences.labels_dir, image_path))
-                self.class_names = load_class_names(self.preferences.classes_path)
-                pixmap = draw_bboxes_on_pixmap(pixmap, boxes, self.preferences.categories, self.class_names)
+            if self.show_bbox_action.isChecked() and self.active_labels_dir:
+                boxes = load_yolo_labels(
+                    label_path_for_image(self.active_labels_dir, image_path)
+                )
+                classes_path = self.active_classes_path
+                self.class_names = load_class_names(classes_path) if classes_path else []
+                pixmap = draw_bboxes_on_pixmap(
+                    pixmap, boxes, self.preferences.categories, self.class_names
+                )
         except Exception as exc:
             self.status.showMessage(f"图片加载失败：{exc}", 5000)
             return
@@ -407,6 +530,7 @@ class MainWindow(QMainWindow):
         self.image_view.set_badge(labels if self.preferences.show_classified_marker else [])
         self.state.current_index = self.current_index
         self._update_status()
+        self._refresh_side_panel()
         self._update_action_states()
 
     def _show_empty_state(self, message: str | None = None) -> None:
@@ -480,35 +604,86 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(self.image_files[self.current_index].name)
         self.status.showMessage("已复制图片名", 2000)
 
+    def reveal_current_image(self) -> None:
+        if not self.image_files:
+            return
+        parent = self.image_files[self.current_index].parent
+        if not parent.exists():
+            self.status.showMessage("目录不存在", 2000)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(parent)))
+
+    def _show_image_context_menu(self, global_pos: QPoint) -> None:
+        if not self.image_files:
+            return
+        menu = QMenu(self)
+        menu.addAction(self.previous_action)
+        menu.addAction(self.next_action)
+        menu.addSeparator()
+        menu.addAction(self.fit_action)
+        menu.addAction(self.actual_size_action)
+        menu.addAction(self.zoom_in_action)
+        menu.addAction(self.zoom_out_action)
+        menu.addSeparator()
+        menu.addAction(self.show_bbox_action)
+        menu.addAction(self.copy_name_action)
+        reveal_action = QAction("在文件管理器中显示", menu)
+        reveal_action.triggered.connect(self.reveal_current_image)
+        menu.addAction(reveal_action)
+
+        if self.preferences.categories:
+            menu.addSeparator()
+            classify_menu = menu.addMenu("分类到")
+            for category in self.preferences.categories:
+                label = f"{category.label}  [{category.key}]"
+                action = QAction(label, classify_menu)
+                action.triggered.connect(
+                    lambda checked=False, cat=category: self.classify_current_image(cat)
+                )
+                classify_menu.addAction(action)
+        menu.exec(global_pos)
+
     def classify_current_image(self, category: Category) -> None:
         if not self.image_files:
             return
-        if not self.preferences.output_dir:
-            QMessageBox.warning(self, "缺少输出目录", "请先在 编辑 → 首选项 中设置默认输出目录。")
+        if self.active_output_dir is None:
+            QMessageBox.warning(self, "缺少输出目录", "无法确定输出目录。请重新打开图片文件夹。")
             return
 
         image_path = self.image_files[self.current_index]
         target_path, strategy = self._resolve_conflict_target(image_path, category)
+        if target_path is None and strategy == "skip":
+            self.status.showMessage(f"已跳过：{image_path.name}（目标已存在）", 2000)
+            self._update_status()
+            self.next_image()
+            return
         if target_path is None or strategy == "cancel":
             self.status.showMessage("已取消分类", 2000)
             return
 
-        operation = classify_image(
-            image_path=image_path,
-            output_dir=self.preferences.output_dir,
-            category=category,
-            kind=self.operation_kind,
-            conflict_strategy=strategy,
-            index=self.current_index,
-            target_path=target_path,
-        )
+        try:
+            operation = classify_image(
+                image_path=image_path,
+                output_dir=self.active_output_dir,
+                category=category,
+                kind=self.operation_kind,
+                conflict_strategy=strategy,
+                index=self.current_index,
+                target_path=target_path,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "分类失败", f"写入失败：{exc}")
+            return
         if operation is None:
             self.status.showMessage(f"已跳过：{image_path.name}", 2000)
+            self._update_status()
+            self.next_image()
             return
 
         self.history.push(operation)
         if self.classification_record:
             self.classification_record.add(image_path.name, category.folder_name)
+        self.side_panel.add_recent_operation(operation, category)
         self._refresh_side_panel()
         self.status.showMessage(f"已分类到 {category.folder_name}", 2000)
 
@@ -525,18 +700,25 @@ class MainWindow(QMainWindow):
         self._update_action_states()
 
     def _resolve_conflict_target(self, image_path: Path, category: Category) -> tuple[Path | None, str]:
-        target = Path(self.preferences.output_dir) / category.folder_name / image_path.name
+        output_dir = self.active_output_dir or Path(".")
+        target = output_dir / category.folder_name / image_path.name
         if not target.exists():
             return target, "rename"
 
-        strategy = self.remembered_conflict_strategy or self.preferences.conflict_strategy
+        strategy = (
+            self.batch_conflict_strategy
+            or self.remembered_conflict_strategy
+            or self.active_conflict_strategy
+        )
         if strategy == "ask":
             dialog = ConflictDialog(str(target), self)
             if not dialog.exec():
                 return None, "cancel"
             strategy = dialog.decision.strategy
-            if dialog.decision.remember:
+            if dialog.decision.apply_to == "session":
                 self.remembered_conflict_strategy = strategy
+            elif dialog.decision.apply_to == "batch":
+                self.batch_conflict_strategy = strategy
 
         return resolve_target_path(target, strategy), strategy
 
@@ -552,6 +734,7 @@ class MainWindow(QMainWindow):
             if self.classification_record:
                 self.classification_record.remove(operation.source_path.name, operation.category_folder)
             self.current_index = min(operation.index, max(len(self.image_files) - 1, 0))
+            self.side_panel.remove_recent_operation(operation)
             self._load_current_image()
             self._refresh_side_panel()
             if self.preferences.undo_prompt:
@@ -560,28 +743,6 @@ class MainWindow(QMainWindow):
                 self.status.showMessage("已撤销", 2000)
         except Exception as exc:
             QMessageBox.warning(self, "撤销失败", str(exc))
-        self._update_action_states()
-
-    def redo(self) -> None:
-        self._pause_autoplay()
-        operation = self.history.pop_redo()
-        if operation is None:
-            return
-        try:
-            redo_operation(operation)
-            if operation.kind == OperationKind.MOVE and operation.source_path in self.image_files:
-                self.image_files.remove(operation.source_path)
-            if self.classification_record:
-                self.classification_record.add(operation.source_path.name, operation.category_folder)
-            self.current_index = min(operation.index, max(len(self.image_files) - 1, 0))
-            if self.image_files:
-                self._load_current_image()
-            else:
-                self._show_empty_state("图片列表已处理完成。")
-            self._refresh_side_panel()
-            self.status.showMessage("已重做", 2000)
-        except Exception as exc:
-            QMessageBox.warning(self, "重做失败", str(exc))
         self._update_action_states()
 
     def open_preferences(self) -> None:
@@ -594,14 +755,75 @@ class MainWindow(QMainWindow):
             self.timer.setInterval(self.preferences.autoplay_interval_ms)
             self._refresh_side_panel()
             self._register_category_shortcuts()
-            ensure_category_folders(self.preferences.output_dir, self.preferences.categories)
             if self.state.image_folder:
+                # open_image_folder will re-resolve active_* paths and re-create
+                # the per-category output subdirs with the new template.
                 self.open_image_folder(self.state.image_folder, reset_index=False)
+            else:
+                self.active_sort_strategy = self.preferences.sort_strategy
+                self.active_sort_descending = self.preferences.sort_descending
+                self.active_conflict_strategy = self.preferences.conflict_strategy
+                self.active_recursive_scan = self.preferences.recursive_scan
 
     def toggle_bboxes(self) -> None:
         self.preferences.show_bboxes = self.show_bbox_action.isChecked()
         self.preferences.save()
         self._load_current_image(fit=False)
+        if self.show_bbox_action.isChecked():
+            self._maybe_prompt_missing_classes()
+
+    def _effective_classes_mode(self) -> str:
+        if self.state.image_folder:
+            overrides = self.state.overrides_for(self.state.image_folder)
+            value = overrides.get("classes_mode")
+            if value:
+                return value
+        return self.preferences.classes_mode or "auto"
+
+    def _maybe_prompt_missing_classes(self) -> None:
+        """If auto mode + labels configured but classes.txt is missing, ask once."""
+        if not self.state.image_folder:
+            return
+        if self.state.image_folder in self._classes_prompt_skipped:
+            return
+        if not self.show_bbox_action.isChecked():
+            return
+        if self._effective_classes_mode() != "auto":
+            return
+        if self.active_labels_dir is None:
+            return
+        if self.active_classes_path and self.active_classes_path.exists():
+            return
+
+        expected = self.active_classes_path or (self.active_labels_dir / "classes.txt")
+        box = QMessageBox(self)
+        box.setWindowTitle("classes.txt 未找到")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            f"在标签目录中未找到 classes.txt：\n  {expected}\n\n"
+            "继续将只在 BBox 上显示数字类别 ID。是否选择一个 classes.txt？"
+        )
+        pick_button = box.addButton("选择文件…", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("本次跳过", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+
+        if box.clickedButton() is pick_button:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "选择 classes.txt",
+                str(self.active_labels_dir),
+                "Text Files (*.txt);;All Files (*)",
+            )
+            if path:
+                self.state.update_overrides(
+                    self.state.image_folder,
+                    classes_mode="custom",
+                    classes_path=path,
+                )
+                self.active_classes_path = Path(path)
+                self._load_current_image(fit=False)
+                return
+        self._classes_prompt_skipped.add(self.state.image_folder)
 
     def toggle_operation_mode(self, checked: bool) -> None:
         self.operation_kind = OperationKind.MOVE if checked else OperationKind.COPY
@@ -611,7 +833,7 @@ class MainWindow(QMainWindow):
     def clear_current_classification_record(self) -> None:
         if not self.classification_record:
             return
-        if QMessageBox.question(self, "确认清除", "清除本文件夹的分类记录？不会删除输出目录中的图片。") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "确认清除", "清除本目录分类记录？不会删除输出目录中的图片。") != QMessageBox.StandardButton.Yes:
             return
         self.classification_record.clear()
         self._load_current_image(fit=False)
@@ -619,20 +841,52 @@ class MainWindow(QMainWindow):
         self._update_status("已清除分类记录")
 
     def show_shortcuts(self) -> None:
-        QMessageBox.information(
-            self,
-            "快捷键速查",
-            "← / →：上一张 / 下一张\n"
-            "Space：自动播放 / 暂停\n"
-            "Ctrl+G：跳转\n"
-            "Ctrl+Z / Ctrl+Y：撤销 / 重做\n"
-            "Ctrl+C：复制图片名\n"
-            "F：适应窗口\n"
-            "0：1:1 实际大小\n"
-            "B：切换 BBox 显示\n"
-            "Ctrl+O：打开图片文件夹\n"
-            "Ctrl+,：首选项",
-        )
+        dialog = ShortcutsDialog(self._build_shortcut_groups(), self)
+        dialog.exec()
+
+    def _build_shortcut_groups(self) -> list[tuple[str, list[tuple[str, str, str]]]]:
+        def text(action: QAction) -> str:
+            return action.shortcut().toString() or "—"
+
+        file_actions = [
+            ("打开图片文件夹", text(self.open_folder_action), ""),
+            ("首选项", text(self.preferences_action), ""),
+            ("退出", text(self.exit_action), ""),
+        ]
+        browse = [
+            ("上一张", "←", ""),
+            ("下一张", "→", ""),
+            ("自动播放 / 暂停", "Space", ""),
+            ("跳转到指定序号", text(self.jump_action), ""),
+            ("适应窗口", text(self.fit_action), "或 双击图片"),
+            ("1:1 实际大小", text(self.actual_size_action), ""),
+            ("放大", text(self.zoom_in_action), "或 Ctrl+滚轮"),
+            ("缩小", text(self.zoom_out_action), ""),
+            ("显示 BBox", text(self.show_bbox_action), ""),
+            ("复制图片名", text(self.copy_name_action), "或 右键菜单"),
+        ]
+        classify = [
+            ("撤销", text(self.undo_action), ""),
+        ]
+
+        output_dir = self.active_output_dir
+        categories: list[tuple[str, str, str]] = []
+        for category in self.preferences.categories:
+            target = (
+                str(output_dir / category.folder_name)
+                if output_dir is not None
+                else category.folder_name
+            )
+            categories.append((category.label, category.key, target))
+        if not categories:
+            categories = [("（尚未配置类别）", "—", "前往 文件 → 首选项 添加")]
+
+        return [
+            ("文件", file_actions),
+            ("浏览", browse),
+            ("分类", classify),
+            ("类别快捷键", categories),
+        ]
 
     def show_about(self) -> None:
         QMessageBox.about(self, "关于", "Magpie\n键盘驱动的本地图像分类工具。")
@@ -650,20 +904,28 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, folder=folder: self.open_image_folder(folder))
 
     def _refresh_side_panel(self) -> None:
-        self.side_panel.refresh(self.preferences.categories, self.preferences.output_dir, self.classification_record)
+        current_name = (
+            self.image_files[self.current_index].name
+            if self.image_files and 0 <= self.current_index < len(self.image_files)
+            else ""
+        )
+        self.side_panel.refresh(
+            self.preferences.categories,
+            str(self.active_output_dir or ""),
+            self.classification_record,
+            current_name,
+        )
 
     def _update_status(self, message: str | None = None) -> None:
         if not self.image_files:
             return
         image_path = self.image_files[self.current_index]
         labels = self.classification_record.labels_for(image_path.name) if self.classification_record else []
-        classified_count = self.classification_record.classified_image_count() if self.classification_record else 0
-        classified = f"已分类: {', '.join(labels)}" if labels else "未分类"
-        self.image_name_label.setText(f"当前图片名称: {image_path.name}")
-        self.index_label.setText(f"{self.current_index + 1} / {len(self.image_files)}")
-        self.path_label.setText(
-            f"{image_path.parent} · {classified} · 已分类 {classified_count} / 总数 {len(self.image_files)}"
-        )
+        total = len(self.image_files)
+        classified_suffix = f" · 已标 {', '.join(labels)}" if labels else ""
+        self.image_name_label.setText(f"{image_path.name}{classified_suffix}")
+        self.index_label.setText(f"{self.current_index + 1} / {total}")
+        self.path_label.setText(str(image_path.parent))
         if message:
             self.status.showMessage(message, 3000)
 
@@ -681,11 +943,9 @@ class MainWindow(QMainWindow):
             self.zoom_out_action,
         ]:
             action.setEnabled(has_images)
-        if hasattr(self, "copy_name_button"):
-            self.copy_name_button.setEnabled(has_images)
-            self.jump_button.setEnabled(has_images)
+        if hasattr(self, "project_settings_action"):
+            self.project_settings_action.setEnabled(bool(self.state.image_folder))
         self.undo_action.setEnabled(self.history.undo_count > 0)
-        self.redo_action.setEnabled(self.history.redo_count > 0)
         if hasattr(self, "side_panel"):
             self.side_panel.set_undo_enabled(self.history.undo_count > 0)
         self.mode_action.setText("移动模式" if self.operation_kind == OperationKind.MOVE else "复制模式")
@@ -694,6 +954,15 @@ class MainWindow(QMainWindow):
         self.state.current_index = self.current_index
         self.state.geometry_hex = bytes(self.saveGeometry().toHex()).decode("ascii")
         self.state.window_state_hex = bytes(self.saveState().toHex()).decode("ascii")
+        if self.state.image_folder:
+            self.state.update_overrides(
+                self.state.image_folder,
+                sort_strategy=self.active_sort_strategy,
+                sort_descending=self.active_sort_descending,
+                conflict_strategy=self.active_conflict_strategy,
+                recursive_scan=self.active_recursive_scan,
+                current_index=self.current_index,
+            )
         self.state.save()
         self.preferences.save()
         super().closeEvent(event)

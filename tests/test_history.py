@@ -1,25 +1,49 @@
-﻿from magpie.core.history import OperationHistory
+from magpie.core.history import OperationHistory
 from magpie.models import Operation, OperationKind
 
 
-def test_history_moves_items_between_undo_and_redo(tmp_path):
-    operation = Operation(
-        source_path=tmp_path / "a.jpg",
-        target_path=tmp_path / "out" / "a.jpg",
+def _make_op(tmp_path, name="a.jpg"):
+    return Operation(
+        source_path=tmp_path / name,
+        target_path=tmp_path / "out" / name,
         category_folder="cat",
         index=0,
         kind=OperationKind.COPY,
     )
+
+
+def test_push_and_pop_undo(tmp_path):
+    op = _make_op(tmp_path)
     history = OperationHistory()
-
-    history.push(operation)
+    history.push(op)
     assert history.undo_count == 1
-    assert history.redo_count == 0
-
-    assert history.pop_undo() == operation
+    assert history.pop_undo() is op
     assert history.undo_count == 0
-    assert history.redo_count == 1
 
-    assert history.pop_redo() == operation
-    assert history.undo_count == 1
-    assert history.redo_count == 0
+
+def test_pop_undo_when_empty_returns_none():
+    history = OperationHistory()
+    assert history.pop_undo() is None
+    assert history.undo_count == 0
+
+
+def test_clear(tmp_path):
+    history = OperationHistory()
+    history.push(_make_op(tmp_path))
+    history.push(_make_op(tmp_path, "b.jpg"))
+    history.clear()
+    assert history.undo_count == 0
+    assert history.pop_undo() is None
+
+
+def test_limit_evicts_oldest(tmp_path):
+    history = OperationHistory(limit=3)
+    ops = [_make_op(tmp_path, f"{i}.jpg") for i in range(5)]
+    for op in ops:
+        history.push(op)
+    assert history.undo_count == 3
+    # LIFO order: pop the most recent first.
+    assert history.pop_undo() is ops[4]
+    assert history.pop_undo() is ops[3]
+    assert history.pop_undo() is ops[2]
+    assert history.pop_undo() is None
