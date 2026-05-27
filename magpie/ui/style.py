@@ -105,19 +105,6 @@ QLabel#countsLabel {
     padding: 0 8px;
 }
 
-QProgressBar#statusProgressBar {
-    border: 1px solid #d4d8df;
-    border-radius: 3px;
-    background: #ffffff;
-    text-align: center;
-    height: 14px;
-}
-
-QProgressBar#statusProgressBar::chunk {
-    background: #3b82f6;
-    border-radius: 2px;
-}
-
 QPushButton#undoButton {
     background: #ff5722;
     color: white;

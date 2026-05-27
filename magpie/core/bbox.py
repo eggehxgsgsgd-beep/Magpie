@@ -8,8 +8,6 @@ from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
 
 from magpie.font_config import overlay_font
 
-from magpie.models import Category
-
 
 @dataclass(slots=True)
 class BBox:
@@ -89,24 +87,27 @@ def load_class_names(path: str | Path) -> list[str]:
     return [line.strip() for line in file_path.read_text(encoding="utf-8", errors="ignore").splitlines()]
 
 
-def class_label(class_id: int, class_names: list[str], categories: list[Category]) -> str:
+def class_label(class_id: int, class_names: list[str]) -> str:
     if class_id < len(class_names) and class_names[class_id]:
         return class_names[class_id]
-    if class_id < len(categories):
-        return categories[class_id].label
     return str(class_id)
 
 
-def class_color(class_id: int, categories: list[Category]) -> QColor:
-    if class_id < len(categories):
-        return QColor(categories[class_id].color)
-    return QColor("#9E9E9E")
+_BBOX_PALETTE = [
+    "#F44336", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0",
+    "#00BCD4", "#FFEB3B", "#E91E63", "#3F51B5", "#8BC34A",
+    "#FF5722", "#009688", "#673AB7", "#CDDC39", "#795548",
+    "#607D8B", "#FFC107", "#03A9F4", "#76FF03", "#FF4081",
+]
+
+
+def class_color(class_id: int) -> QColor:
+    return QColor(_BBOX_PALETTE[class_id % len(_BBOX_PALETTE)])
 
 
 def draw_bboxes_on_pixmap(
     pixmap: QPixmap,
     boxes: list[BBox],
-    categories: list[Category],
     class_names: list[str],
 ) -> QPixmap:
     if pixmap.isNull() or not boxes:
@@ -115,15 +116,17 @@ def draw_bboxes_on_pixmap(
     output = QPixmap(pixmap)
     painter = QPainter(output)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setFont(overlay_font())
+    # Scale font to image size so labels are readable on high-res images.
+    font_size = max(12, min(output.width(), output.height()) // 50)
+    painter.setFont(overlay_font(point_size=font_size))
 
     for box in boxes:
-        color = class_color(box.class_id, categories)
-        pen = QPen(color, 3)
+        color = class_color(box.class_id)
+        pen = QPen(color, max(3, min(output.width(), output.height()) // 300))
         painter.setPen(pen)
         rect = box.to_rect(output.width(), output.height())
         painter.drawRect(rect)
-        painter.drawText(rect.topLeft().toPoint(), class_label(box.class_id, class_names, categories))
+        painter.drawText(rect.topLeft().toPoint(), class_label(box.class_id, class_names))
 
     painter.end()
     return output

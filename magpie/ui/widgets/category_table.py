@@ -1,8 +1,7 @@
 """Reusable category table widget.
 
-Editable table with 4 columns (shortcut / folder / display / color):
+Editable table with 3 columns (shortcut / folder / display):
 - drag-and-drop row reorder
-- double-click the color cell to pick a color
 - shortcut column highlights conflicts in red as user types
 - display-name column auto-syncs with folder-name column until the user
   edits display manually
@@ -19,7 +18,6 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QColorDialog,
     QHBoxLayout,
     QHeaderView,
     QMessageBox,
@@ -30,7 +28,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from magpie.config import DEFAULT_PALETTE
 from magpie.core.classifier import validate_folder_name
 from magpie.models import Category
 
@@ -64,13 +61,12 @@ class CategoryTableWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["快捷键", "类别文件夹名", "显示名称", "颜色"])
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["快捷键", "类别文件夹名", "显示名称"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -82,7 +78,6 @@ class CategoryTableWidget(QWidget):
         self.table.verticalHeader().setVisible(True)
         self.table.verticalHeader().setSectionsMovable(False)
         self.table.itemChanged.connect(self._on_item_changed)
-        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         layout.addWidget(self.table, stretch=1)
 
         buttons_row = QHBoxLayout()
@@ -113,14 +108,8 @@ class CategoryTableWidget(QWidget):
             key = self._text(row, 0)
             folder_name = self._text(row, 1)
             display_name = self._text(row, 2) or folder_name
-            color_item = self.table.item(row, 3)
-            color = (
-                color_item.text().strip()
-                if color_item and color_item.text().strip()
-                else DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)]
-            )
             result.append(
-                Category(key=key, folder_name=folder_name, display_name=display_name, color=color)
+                Category(key=key, folder_name=folder_name, display_name=display_name)
             )
         return result
 
@@ -175,7 +164,6 @@ class CategoryTableWidget(QWidget):
                     key="",
                     folder_name=f"class_{row + 1}",
                     display_name=f"class_{row + 1}",
-                    color=DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)],
                 )
             synced = (
                 not category.display_name
@@ -189,36 +177,9 @@ class CategoryTableWidget(QWidget):
             self.table.setItem(row, 0, key_item)
             self.table.setItem(row, 1, folder_item)
             self.table.setItem(row, 2, display_item)
-            self._set_color_cell(row, category.color or DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)])
         finally:
             self.table.blockSignals(False)
         self._highlight_shortcut_conflicts()
-
-    def _set_color_cell(self, row: int, color_hex: str) -> None:
-        color = QColor(color_hex)
-        if not color.isValid():
-            color = QColor(DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)])
-        item = QTableWidgetItem(color.name())
-        item.setBackground(QBrush(color))
-        item.setForeground(QBrush(QColor("#111827" if color.lightnessF() > 0.6 else "#ffffff")))
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        item.setToolTip("双击修改颜色")
-        self.table.setItem(row, 3, item)
-
-    def _on_cell_double_clicked(self, row: int, column: int) -> None:
-        if column != 3:
-            return
-        item = self.table.item(row, column)
-        current = item.text() if item else DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)]
-        chosen = QColorDialog.getColor(QColor(current), self, "选择类别颜色")
-        if chosen.isValid():
-            self.table.blockSignals(True)
-            try:
-                self._set_color_cell(row, chosen.name())
-            finally:
-                self.table.blockSignals(False)
-            self.categoriesChanged.emit()
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         column = item.column()

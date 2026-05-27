@@ -18,22 +18,6 @@ from .paths import preferences_path
 
 DEFAULT_EXTENSIONS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
 
-DEFAULT_PALETTE = [
-    "#22C55E",
-    "#3B82F6",
-    "#F59E0B",
-    "#EF4444",
-    "#A855F7",
-    "#EC4899",
-    "#14B8A6",
-    "#F97316",
-    "#6366F1",
-    "#84CC16",
-    "#06B6D4",
-    "#78716C",
-]
-
-
 DEFAULT_OUTPUT_DIR_TEMPLATE = "{parent}/{name}_filtered"
 
 
@@ -71,9 +55,9 @@ class Preferences:
     output_dir_template: str = DEFAULT_OUTPUT_DIR_TEMPLATE
 
     # ---- Display / behavior ----
+    prefetch_count: int = 3
     autoplay_interval_ms: int = 100
     show_bboxes: bool = True
-    show_classified_marker: bool = True
     theme: str = "system"
     default_operation: OperationKind = OperationKind.COPY
     undo_prompt: bool = False
@@ -126,9 +110,9 @@ class Preferences:
             output_dir_template=str(
                 data.get("output_dir_template") or DEFAULT_OUTPUT_DIR_TEMPLATE
             ),
+            prefetch_count=max(1, min(int(data.get("prefetch_count", 3)), 20)),
             autoplay_interval_ms=int(data.get("autoplay_interval_ms", 100)),
             show_bboxes=bool(data.get("show_bboxes", True)),
-            show_classified_marker=bool(data.get("show_classified_marker", True)),
             theme=str(data.get("theme", "system")),
             default_operation=default_operation,
             undo_prompt=bool(data.get("undo_prompt", False)),
@@ -151,9 +135,9 @@ class Preferences:
             "active_sort_preset_id": self.active_sort_preset_id,
             "sort_descending": self.sort_descending,
             "output_dir_template": self.output_dir_template,
+            "prefetch_count": self.prefetch_count,
             "autoplay_interval_ms": self.autoplay_interval_ms,
             "show_bboxes": self.show_bboxes,
-            "show_classified_marker": self.show_classified_marker,
             "theme": self.theme,
             "default_operation": self.default_operation.value,
             "undo_prompt": self.undo_prompt,

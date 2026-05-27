@@ -90,12 +90,13 @@ def _find_labels_preset(presets: list[LabelsPreset], preset_id: str) -> LabelsPr
 
 
 def resolve_class_names(
-    prefs: Preferences, overrides: dict | None
+    prefs: Preferences, overrides: dict | None, folder: Path | None = None,
 ) -> list[str]:
     """Return the class-name list in effect right now.
 
     Encoding (overrides["classes_selection"] / prefs.default_classes_selection):
-    - ``preset:<id>`` — the preset's ``names``
+    - ``preset:<id>`` — the preset's inline ``names``
+    - ``labels`` — auto-discover ``classes.txt`` from the resolved labels dir
     - ``none`` — empty list
     """
     overrides = overrides or {}
@@ -105,6 +106,21 @@ def resolve_class_names(
         or "none"
     ).strip()
     if not selection or selection == "none":
+        return []
+    if selection == "labels":
+        # Load classes.txt from the active labels directory.
+        if folder is None:
+            return []
+        labels_dir = resolve_labels_dir(prefs, overrides, folder)
+        if labels_dir is None:
+            return []
+        classes_file = labels_dir / "classes.txt"
+        if classes_file.is_file():
+            return [
+                line.strip()
+                for line in classes_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+                if line.strip()
+            ]
         return []
     if selection.startswith("preset:"):
         preset_id = selection.split(":", 1)[1]

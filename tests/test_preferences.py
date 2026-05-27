@@ -16,7 +16,7 @@ def test_preferences_round_trip(tmp_path):
                 id="default",
                 name="默认",
                 categories=[
-                    Category(key="1", folder_name="cat", display_name="cat label", color="#00ff00"),
+                    Category(key="1", folder_name="cat", display_name="cat label"),
                 ],
             )
         ],

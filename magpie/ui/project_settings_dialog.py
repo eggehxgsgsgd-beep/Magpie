@@ -37,7 +37,8 @@ class ProjectSettingsResult:
     """Result of editing per-folder overrides for the currently-opened folder."""
     output_dir: str | None
     labels_selection: str | None    # "preset:<id>" | "path:<v>" | "none" | None (=follow default)
-    classes_selection: str | None   # "preset:<id>" | "none" | None
+    classes_selection: str | None   # "preset:<id>" | "labels" | "none" | None
+    conflict_strategy: str | None   # "ask" | "skip" | "overwrite" | "rename" | None (=follow default)
     sort_preset_id: str | None
     sort_descending: bool | None
 
@@ -144,6 +145,26 @@ class ProjectSettingsDialog(QDialog):
         classes_row.addWidget(self.classes_combo, stretch=1)
         outer.addLayout(classes_row)
         self._populate_classes_combo()
+
+        outer.addWidget(self._hr())
+
+        # ----- 冲突策略 -----
+        outer.addWidget(QLabel("<b>冲突策略</b>"))
+        conflict_row = QHBoxLayout()
+        conflict_row.addWidget(QLabel("策略"))
+        self.conflict_combo = QComboBox()
+        self.conflict_combo.addItem(f"跟随默认（{self._describe_conflict(prefs.conflict_strategy)}）", "")
+        self.conflict_combo.addItem("询问", "ask")
+        self.conflict_combo.addItem("跳过", "skip")
+        self.conflict_combo.addItem("覆盖", "overwrite")
+        self.conflict_combo.addItem("重命名", "rename")
+        conflict_row.addWidget(self.conflict_combo, stretch=1)
+        outer.addLayout(conflict_row)
+        current_conflict = self._initial_overrides.get("conflict_strategy") or ""
+        cidx = self.conflict_combo.findData(current_conflict)
+        if cidx < 0:
+            cidx = 0
+        self.conflict_combo.setCurrentIndex(cidx)
 
         outer.addWidget(self._hr())
 
@@ -299,6 +320,7 @@ class ProjectSettingsDialog(QDialog):
         for preset in self._prefs.classes_presets:
             self.classes_combo.addItem(f"{preset.name}（{len(preset.names)} 项）", f"preset:{preset.id}")
         self.classes_combo.insertSeparator(self.classes_combo.count())
+        self.classes_combo.addItem("从标签目录加载 classes.txt", "labels")
         self.classes_combo.addItem("不加载", "none")
 
         current = self._initial_overrides.get("classes_selection") or ""
@@ -311,6 +333,8 @@ class ProjectSettingsDialog(QDialog):
         selection = (selection or "").strip()
         if not selection or selection == "none":
             return "不加载"
+        if selection == "labels":
+            return "从标签目录加载"
         if selection.startswith("preset:"):
             preset_id = selection.split(":", 1)[1]
             preset = next((p for p in self._prefs.classes_presets if p.id == preset_id), None)
@@ -318,6 +342,10 @@ class ProjectSettingsDialog(QDialog):
                 return "未配置"
             return f"{preset.name}（{len(preset.names)} 项）"
         return selection
+
+    @staticmethod
+    def _describe_conflict(strategy: str) -> str:
+        return {"ask": "询问", "skip": "跳过", "overwrite": "覆盖", "rename": "重命名"}.get(strategy, strategy)
 
     # ---- reset ----
 
@@ -333,6 +361,7 @@ class ProjectSettingsDialog(QDialog):
             output_dir=None,
             labels_selection=None,
             classes_selection=None,
+            conflict_strategy=None,
             sort_preset_id=None,
             sort_descending=None,
         )
@@ -365,6 +394,10 @@ class ProjectSettingsDialog(QDialog):
         classes_value = self.classes_combo.currentData() or ""
         classes_selection = classes_value or None
 
+        # Conflict strategy
+        conflict_value = self.conflict_combo.currentData() or ""
+        conflict_strategy = conflict_value or None
+
         # Sort
         sort_preset_id = self.sort_combo.currentData()
         if sort_preset_id == self._prefs.active_sort_preset_id:
@@ -383,6 +416,7 @@ class ProjectSettingsDialog(QDialog):
             output_dir=output_dir,
             labels_selection=labels_selection,
             classes_selection=classes_selection,
+            conflict_strategy=conflict_strategy,
             sort_preset_id=sort_preset_id_to_store,
             sort_descending=sort_descending_to_store,
         )

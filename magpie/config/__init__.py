@@ -3,7 +3,6 @@ from .paths import app_data_dir, classifications_dir, log_dir, preferences_path,
 from .preferences import (
     DEFAULT_EXTENSIONS,
     DEFAULT_OUTPUT_DIR_TEMPLATE,
-    DEFAULT_PALETTE,
     Preferences,
 )
 from .preset_resolution import (
@@ -20,7 +19,6 @@ __all__ = [
     "ClassificationRecord",
     "DEFAULT_EXTENSIONS",
     "DEFAULT_OUTPUT_DIR_TEMPLATE",
-    "DEFAULT_PALETTE",
     "Preferences",
     "ProjectPathError",
     "app_data_dir",

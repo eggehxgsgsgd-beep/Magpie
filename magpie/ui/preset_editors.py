@@ -4,7 +4,7 @@ Sort presets are edited via ``CustomSortPresetEditor`` in
 ``preferences_dialog.py``; this module covers the other three:
 
 - ``CategoryPresetEditor`` — name + full category table (shortcut/folder/
-  display/color, drag-reorder, conflict highlight). Uses ``CategoryTableWidget``.
+  display, drag-reorder, conflict highlight). Uses ``CategoryTableWidget``.
 - ``LabelsPresetEditor`` — name + a relative path (typed; no directory
   picker, since the value is conceptually a relative-to-source path).
 - ``ClassesPresetEditor`` — name + multi-line names (one per line, paste-style).
@@ -59,7 +59,7 @@ class CategoryPresetEditor(QDialog):
         form.addRow("方案名称", self.name_edit)
         layout.addLayout(form)
 
-        hint = QLabel("可拖动整行调整顺序。每个类别必须填写快捷键；双击颜色列可选择类别颜色。")
+        hint = QLabel("可拖动整行调整顺序。每个类别必须填写快捷键。")
         hint.setStyleSheet("color: #6b7280; font-size: 11px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -114,9 +114,8 @@ class LabelsPresetEditor(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑标签目录方案" if preset else "新建标签目录方案")
-        self.resize(500, 220)
-        self.setMinimumSize(500, 220)
-        self.setMaximumWidth(500)
+        self.resize(520, 320)
+        self.setMinimumSize(520, 280)
         self._original = preset
         self._preview_folder = preview_folder or Path("/data/dataset_A")
         self._result: LabelsPreset | None = None

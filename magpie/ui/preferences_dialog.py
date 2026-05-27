@@ -723,13 +723,15 @@ class PreferencesDialog(QDialog):
         autoplay_row.addWidget(self.autoplay_spin)
         layout.addRow("自动播放间隔(ms)", autoplay_row)
 
+        self.prefetch_spin = QSpinBox()
+        self.prefetch_spin.setRange(1, 20)
+        self.prefetch_spin.setValue(self.preferences.prefetch_count)
+        self.prefetch_spin.setToolTip("预加载后续图片的数量，值越大切换越流畅但占用更多内存")
+        layout.addRow("预加载数量", self.prefetch_spin)
+
         self.show_bboxes_check = QCheckBox("默认显示 BBox")
         self.show_bboxes_check.setChecked(self.preferences.show_bboxes)
         layout.addRow(self.show_bboxes_check)
-
-        self.show_classified_check = QCheckBox("显示已分类标记")
-        self.show_classified_check.setChecked(self.preferences.show_classified_marker)
-        layout.addRow(self.show_classified_check)
 
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["system", "light", "dark"])
@@ -875,9 +877,9 @@ class PreferencesDialog(QDialog):
         self.preferences.sort_descending = self.sort_desc_radio.isChecked()
 
         # Display
+        self.preferences.prefetch_count = self.prefetch_spin.value()
         self.preferences.autoplay_interval_ms = self.autoplay_spin.value()
         self.preferences.show_bboxes = self.show_bboxes_check.isChecked()
-        self.preferences.show_classified_marker = self.show_classified_check.isChecked()
         self.preferences.theme = self.theme_combo.currentText()
 
         # Behavior
