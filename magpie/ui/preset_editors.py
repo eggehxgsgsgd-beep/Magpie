@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -53,11 +54,12 @@ class CategoryPresetEditor(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.name_edit = QLineEdit(preset.name if preset else "")
+        self.name_edit.setCursor(Qt.CursorShape.ArrowCursor)
         self.name_edit.setPlaceholderText("如：OK/NG · 5 级质量")
         form.addRow("方案名称", self.name_edit)
         layout.addLayout(form)
 
-        hint = QLabel("可拖动整行调整顺序。双击颜色列可选择类别颜色。")
+        hint = QLabel("可拖动整行调整顺序。每个类别必须填写快捷键；双击颜色列可选择类别颜色。")
         hint.setStyleSheet("color: #6b7280; font-size: 11px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -113,6 +115,8 @@ class LabelsPresetEditor(QDialog):
         super().__init__(parent)
         self.setWindowTitle("编辑标签目录方案" if preset else "新建标签目录方案")
         self.resize(500, 220)
+        self.setMinimumSize(500, 220)
+        self.setMaximumWidth(500)
         self._original = preset
         self._preview_folder = preview_folder or Path("/data/dataset_A")
         self._result: LabelsPreset | None = None
@@ -142,11 +146,17 @@ class LabelsPresetEditor(QDialog):
         path_hint.setWordWrap(True)
         layout.addWidget(path_hint)
 
-        self.preview_label = QLabel("")
-        self.preview_label.setStyleSheet("color: #6b7280; font-size: 11px;")
-        self.preview_label.setWordWrap(True)
-        self.preview_label.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(self.preview_label)
+        layout.addWidget(QLabel("<b>预览</b>"))
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setAcceptRichText(False)
+        self.preview_text.setFixedHeight(58)
+        self.preview_text.setStyleSheet(
+            "QTextEdit { color: #6b7280; font-size: 11px;"
+            " background: #f9fafb; border: 1px solid #e5e7eb;"
+            " border-radius: 4px; padding: 4px; }"
+        )
+        layout.addWidget(self.preview_text)
 
         layout.addStretch()
 
@@ -168,16 +178,16 @@ class LabelsPresetEditor(QDialog):
     def _refresh_preview(self) -> None:
         raw = self.path_edit.text().strip()
         if not raw:
-            self.preview_label.setText("（留空表示不加载标签）")
+            self.preview_text.setPlainText("（留空表示不加载标签）")
+            self.preview_text.setToolTip("")
             return
         # Path/-with-absolute or ~ still gets handled by the runtime resolver;
         # match its behavior here so the preview never lies.
         p = Path(raw).expanduser()
         joined = p if p.is_absolute() else (self._preview_folder / p)
         normalized = os.path.normpath(str(joined))
-        self.preview_label.setText(
-            f"预览：{self._preview_folder} → <code>{normalized}</code>"
-        )
+        self.preview_text.setPlainText(normalized)
+        self.preview_text.setToolTip(normalized)
 
     def _on_accept(self) -> None:
         name = self.name_edit.text().strip()

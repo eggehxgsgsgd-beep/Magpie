@@ -8,7 +8,9 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QScrollArea,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -22,24 +24,34 @@ QWidget#sidePanel {
     background: #ffffff;
 }
 QLabel#panelTitle {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: #1f2937;
-    padding: 4px 2px 4px 2px;
-    border-bottom: 1px solid #e5e7eb;
+    padding: 0;
+}
+QPushButton#panelLinkButton {
+    color: #2563eb;
+    border: none;
+    background: transparent;
+    padding: 2px 4px;
+    font-size: 12px;
+}
+QPushButton#panelLinkButton:hover {
+    color: #1d4ed8;
+    text-decoration: underline;
 }
 QFrame#categoryRow {
-    background: #f8fafc;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
+    background: #ffffff;
+    border: 0;
+    border-bottom: 1px solid #e5e7eb;
+    border-radius: 0;
 }
 QFrame#categoryRow:hover {
-    background: #eef2ff;
-    border-color: #c7d2fe;
+    background: #ffffff;
 }
 QFrame#categoryRow[active="true"] {
     background: #ecfdf5;
-    border: 1px solid #34d399;
+    border-bottom: 1px solid #bbf7d0;
 }
 QLabel#categoryKeyBadge {
     background: #ffffff;
@@ -50,23 +62,49 @@ QLabel#categoryKeyBadge {
     font-size: 12px;
     padding: 1px 0;
 }
+QLabel#categoryKeyBadge[missing="true"] {
+    color: #b45309;
+    border-color: #f59e0b;
+    background: #fffbeb;
+}
 QLabel#categoryLabel {
     color: #111827;
     font-size: 13px;
 }
 QLabel#categoryCount {
-    color: #6b7280;
+    color: #9ca3af;
     font-size: 12px;
-    font-weight: 600;
-    min-width: 28px;
+    min-width: 38px;
 }
-QLabel#categoryEmptyHint {
+QFrame#categoryEmptyHint {
     color: #6b7280;
     font-size: 12px;
-    padding: 12px;
+    padding: 10px;
     background: #f9fafb;
-    border: 1px dashed #d1d5db;
+    border: 1px solid #e5e7eb;
     border-radius: 6px;
+}
+QPushButton#emptyActionButton {
+    color: #1f2937;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+QPushButton#emptyActionButton:hover {
+    background: #f3f4f6;
+}
+QLabel#recentEmptyHint {
+    color: #9ca3af;
+    font-size: 12px;
+    padding: 4px 2px;
+}
+QTabWidget#sidePanelTabs::pane {
+    border: 0;
+}
+QTabWidget#sidePanelTabs QTabBar::tab {
+    padding: 5px 12px;
 }
 QListWidget#recentList {
     background: #ffffff;
@@ -95,22 +133,19 @@ def _color_pixmap(color: str, size: int = 12) -> QPixmap:
 
 
 class CategoryRow(QFrame):
-    """One clickable row in the side panel representing a Category."""
-
-    clicked = pyqtSignal(object)  # Category
+    """One display row in the side panel representing a Category."""
 
     def __init__(self, category: Category, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.category = category
         self.setObjectName("categoryRow")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._active = False
         self.setProperty("active", "false")
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(6, 5, 6, 5)
         layout.setSpacing(8)
 
         self.swatch = QLabel()
@@ -120,17 +155,18 @@ class CategoryRow(QFrame):
         )
         layout.addWidget(self.swatch)
 
-        self.key_badge = QLabel(self.category.key or "·")
+        shortcut = self.category.key.strip()
+        self.key_badge = QLabel(shortcut or "!")
         self.key_badge.setObjectName("categoryKeyBadge")
+        self.key_badge.setProperty("missing", "true" if not shortcut else "false")
         self.key_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.key_badge.setFixedWidth(22)
+        self.key_badge.setFixedWidth(28)
         layout.addWidget(self.key_badge)
 
         self.label = QLabel(self.category.label)
         self.label.setObjectName("categoryLabel")
-        self.label.setToolTip(
-            f"快捷键 {self.category.key} · 文件夹 {self.category.folder_name}"
-        )
+        tooltip_prefix = f"快捷键 {shortcut} · " if shortcut else "缺少快捷键 · "
+        self.label.setToolTip(f"{tooltip_prefix}文件夹 {self.category.folder_name}")
         layout.addWidget(self.label, stretch=1)
 
         self.count = QLabel("0")
@@ -139,20 +175,12 @@ class CategoryRow(QFrame):
         layout.addWidget(self.count)
 
     def update_state(self, count: int, active: bool) -> None:
-        self.count.setText(str(count))
+        self.count.setText(f"{count} 张")
         if self._active != active:
             self._active = active
             self.setProperty("active", "true" if active else "false")
             self.style().unpolish(self)
             self.style().polish(self)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.category)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
 
 class SidePanel(QWidget):
     """Side panel with clickable categories and a recent operations list.
@@ -162,7 +190,7 @@ class SidePanel(QWidget):
     image-display area's bottom.
     """
 
-    classifyRequested = pyqtSignal(object)  # Category
+    manageCategoriesRequested = pyqtSignal()
 
     RECENT_LIMIT = 12
 
@@ -170,7 +198,7 @@ class SidePanel(QWidget):
         super().__init__(parent)
         self.setObjectName("sidePanel")
         self.setStyleSheet(PANEL_QSS)
-        self.setFixedWidth(260)
+        self.setFixedWidth(320)
 
         self._rows: list[CategoryRow] = []
         self._record: ClassificationRecord | None = None
@@ -181,22 +209,52 @@ class SidePanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(0)
 
-        category_title = QLabel("类别")
-        category_title.setObjectName("panelTitle")
-        layout.addWidget(category_title)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("sidePanelTabs")
+        self.tabs.setDocumentMode(True)
+        layout.addWidget(self.tabs)
 
-        self.empty_label = QLabel("尚未配置类别。\n请进入 文件 → 首选项 添加类别。")
+        category_tab = QWidget()
+        category_layout = QVBoxLayout(category_tab)
+        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.setSpacing(6)
+
+        category_header = QHBoxLayout()
+        category_header.setContentsMargins(0, 0, 0, 0)
+        category_header.addStretch()
+        manage_button = QPushButton("管理")
+        manage_button.setObjectName("panelLinkButton")
+        manage_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        manage_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        manage_button.clicked.connect(self.manageCategoriesRequested.emit)
+        category_header.addWidget(manage_button)
+        category_layout.addLayout(category_header)
+
+        self.empty_widget = QFrame()
+        self.empty_widget.setObjectName("categoryEmptyHint")
+        empty_layout = QVBoxLayout(self.empty_widget)
+        empty_layout.setContentsMargins(10, 10, 10, 10)
+        empty_layout.setSpacing(8)
+        self.empty_label = QLabel("尚未配置类别。\n添加后可用快捷键快速分类。")
         self.empty_label.setObjectName("categoryEmptyHint")
         self.empty_label.setWordWrap(True)
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.empty_label)
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.empty_label.setStyleSheet("border: none; background: transparent; padding: 0;")
+        empty_layout.addWidget(self.empty_label)
+        empty_action = QPushButton("打开首选项")
+        empty_action.setObjectName("emptyActionButton")
+        empty_action.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        empty_action.setCursor(Qt.CursorShape.PointingHandCursor)
+        empty_action.clicked.connect(self.manageCategoriesRequested.emit)
+        empty_layout.addWidget(empty_action, alignment=Qt.AlignmentFlag.AlignLeft)
+        category_layout.addWidget(self.empty_widget)
 
         self.category_container = QWidget()
         self.category_layout = QVBoxLayout(self.category_container)
         self.category_layout.setContentsMargins(0, 0, 0, 0)
-        self.category_layout.setSpacing(4)
+        self.category_layout.setSpacing(0)
         self.category_layout.addStretch(1)
 
         self.category_scroll = QScrollArea()
@@ -204,11 +262,18 @@ class SidePanel(QWidget):
         self.category_scroll.setWidgetResizable(True)
         self.category_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.category_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        layout.addWidget(self.category_scroll, stretch=1)
+        category_layout.addWidget(self.category_scroll, stretch=1)
 
-        recent_title = QLabel("最近操作")
-        recent_title.setObjectName("panelTitle")
-        layout.addWidget(recent_title)
+        self.tabs.addTab(category_tab, "类别")
+
+        recent_tab = QWidget()
+        recent_layout = QVBoxLayout(recent_tab)
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        recent_layout.setSpacing(6)
+
+        self.recent_empty_label = QLabel("暂无操作记录")
+        self.recent_empty_label.setObjectName("recentEmptyHint")
+        recent_layout.addWidget(self.recent_empty_label)
 
         self.recent_list = QListWidget()
         self.recent_list.setObjectName("recentList")
@@ -217,7 +282,9 @@ class SidePanel(QWidget):
         self.recent_list.setIconSize(QSize(12, 12))
         self.recent_list.setMaximumHeight(200)
         self.recent_list.setUniformItemSizes(True)
-        layout.addWidget(self.recent_list)
+        recent_layout.addWidget(self.recent_list)
+        recent_layout.addStretch()
+        self.tabs.addTab(recent_tab, "最近操作")
         # The undo button used to live here; it has moved to the bottom of the
         # main window so its bottom aligns with the image-display area's
         # bottom. Main window owns it now.
@@ -253,7 +320,7 @@ class SidePanel(QWidget):
             row.update_state(count, active)
 
         has_categories = bool(categories)
-        self.empty_label.setVisible(not has_categories)
+        self.empty_widget.setVisible(not has_categories)
         self.category_scroll.setVisible(has_categories)
 
     def _rebuild_rows(self, categories: list[Category]) -> None:
@@ -264,7 +331,6 @@ class SidePanel(QWidget):
 
         for category in categories:
             row = CategoryRow(category)
-            row.clicked.connect(self.classifyRequested.emit)
             self.category_layout.insertWidget(self.category_layout.count() - 1, row)
             self._rows.append(row)
 
@@ -278,6 +344,7 @@ class SidePanel(QWidget):
         self.recent_list.insertItem(0, item)
         while self.recent_list.count() > self.RECENT_LIMIT:
             self.recent_list.takeItem(self.recent_list.count() - 1)
+        self._update_recent_empty_state()
 
     def remove_recent_operation(self, operation: Operation) -> None:
         """Drop the matching entry from the list (called after an undo)."""
@@ -285,10 +352,17 @@ class SidePanel(QWidget):
         for i in range(self.recent_list.count()):
             if self.recent_list.item(i).data(Qt.ItemDataRole.UserRole) == key:
                 self.recent_list.takeItem(i)
+                self._update_recent_empty_state()
                 return
 
     def clear_recent_operations(self) -> None:
         self.recent_list.clear()
+        self._update_recent_empty_state()
+
+    def _update_recent_empty_state(self) -> None:
+        has_items = self.recent_list.count() > 0
+        self.recent_empty_label.setVisible(not has_items)
+        self.recent_list.setVisible(has_items)
 
     @staticmethod
     def _operation_key(operation: Operation) -> tuple:

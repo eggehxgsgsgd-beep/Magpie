@@ -15,6 +15,44 @@ QMenuBar {
     border-bottom: 1px solid #dde2ea;
 }
 
+QMenuBar::item {
+    background: transparent;
+    color: #1f2328;
+    padding: 5px 12px;
+    font-size: 14px;
+}
+
+QMenuBar::item:selected {
+    background: #eef1f5;
+}
+
+QMenu {
+    font-size: 14px;
+}
+
+QTabWidget::pane {
+    border: 1px solid #e5e7eb;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    padding: 6px 16px;
+    font-size: 14px;
+    color: #4b5563;
+}
+
+QTabBar::tab:selected {
+    color: #111827;
+    font-weight: 600;
+    border-bottom-color: #ffffff;
+}
+
+QTabBar::tab:hover:!selected {
+    background: #f7f8fa;
+}
+
 QToolBar {
     background: #f7f8fa;
     border: 0;
@@ -55,6 +93,7 @@ QLabel#indexLabel {
 }
 
 QLabel#pathLabel {
+    font-family: Cascadia Mono, Consolas, monospace;
     font-size: 12px;
     color: #6b7280;
     padding: 0 6px;
@@ -84,11 +123,14 @@ QPushButton#undoButton {
     color: white;
     border: none;
     border-radius: 4px;
-    padding: 6px 12px;
+    padding: 5px 12px;
     font-weight: 600;
 }
 QPushButton#undoButton:hover { background: #f4511e; }
-QPushButton#undoButton:disabled { background: #d1d5db; color: #ffffff; }
+QPushButton#undoButton:disabled {
+    background: #eef0f3;
+    color: #9ca3af;
+}
 """
 
 

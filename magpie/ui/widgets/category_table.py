@@ -35,7 +35,22 @@ from magpie.core.classifier import validate_folder_name
 from magpie.models import Category
 
 
-RESERVED_SHORTCUTS = {"f", "0", "b", "+", "-"}
+APP_RESERVED_SHORTCUTS = {
+    " ",
+    "+",
+    "-",
+    "0",
+    "b",
+    "f",
+}
+APP_RESERVED_SHORTCUT_LABELS = {
+    " ": "自动播放",
+    "+": "放大",
+    "-": "缩小",
+    "0": "1:1",
+    "b": "显示 BBox",
+    "f": "适应窗口",
+}
 VISIBLE_SINGLE_KEYS = set(string.ascii_letters + string.digits + "-=[];',./`\\")
 
 
@@ -114,10 +129,13 @@ class CategoryTableWidget(QWidget):
         seen_folders: set[str] = set()
         for category in self.categories():
             key = category.key
+            if not key:
+                return "快捷键不能为空：请为每个类别设置一个单键快捷键"
             if len(key) != 1 or key not in VISIBLE_SINGLE_KEYS:
-                return f"快捷键 {key or '<空>'} 无效：仅支持单个可见字符"
-            if key.lower() in RESERVED_SHORTCUTS:
-                return f"快捷键 {key} 与系统快捷键冲突"
+                return f"快捷键 {key} 无效：仅支持单个可见字符"
+            reserved_for = APP_RESERVED_SHORTCUT_LABELS.get(key.lower(), "软件功能")
+            if key.lower() in APP_RESERVED_SHORTCUTS:
+                return f"快捷键 {key} 与「{reserved_for}」冲突"
             if key in seen_keys:
                 return f"快捷键 {key} 重复"
             seen_keys.add(key)
@@ -154,7 +172,7 @@ class CategoryTableWidget(QWidget):
             self.table.insertRow(row)
             if category is None:
                 category = Category(
-                    key=str(row + 1),
+                    key="",
                     folder_name=f"class_{row + 1}",
                     display_name=f"class_{row + 1}",
                     color=DEFAULT_PALETTE[row % len(DEFAULT_PALETTE)],
@@ -233,11 +251,15 @@ class CategoryTableWidget(QWidget):
             seen.setdefault(item.text().strip(), []).append(row)
         for value, rows in seen.items():
             conflict = len(rows) > 1 and value != ""
+            reserved_for = APP_RESERVED_SHORTCUT_LABELS.get(value.lower())
             for row in rows:
                 item = self.table.item(row, 0)
                 if not item:
                     continue
-                if conflict:
+                if value and reserved_for:
+                    item.setBackground(QBrush(QColor("#fed7aa")))
+                    item.setToolTip(f"快捷键与「{reserved_for}」冲突")
+                elif conflict:
                     item.setBackground(QBrush(QColor("#fecaca")))
                     item.setToolTip("快捷键与其他行重复")
                 else:

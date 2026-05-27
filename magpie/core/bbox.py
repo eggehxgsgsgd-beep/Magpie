@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import QRectF
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
+
+from magpie.font_config import overlay_font
 
 from magpie.models import Category
 
@@ -113,9 +115,7 @@ def draw_bboxes_on_pixmap(
     output = QPixmap(pixmap)
     painter = QPainter(output)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    font = QFont()
-    font.setPointSize(12)
-    painter.setFont(font)
+    painter.setFont(overlay_font())
 
     for box in boxes:
         color = class_color(box.class_id, categories)

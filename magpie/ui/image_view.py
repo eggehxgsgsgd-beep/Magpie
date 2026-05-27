@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QWheelEvent
+from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView
+
+from magpie.font_config import overlay_font
 
 
 class ImageView(QGraphicsView):
@@ -26,10 +28,7 @@ class ImageView(QGraphicsView):
         self.badge_bg.setBrush(QBrush(QColor(0, 0, 0, 180)))
         self.badge_bg.setPen(QPen(Qt.PenStyle.NoPen))
         self.badge_text.setBrush(QBrush(QColor("white")))
-        font = QFont()
-        font.setPointSize(12)
-        font.setBold(True)
-        self.badge_text.setFont(font)
+        self.badge_text.setFont(overlay_font(bold=True))
         self.set_badge([])
         self.setScene(self.scene)
 

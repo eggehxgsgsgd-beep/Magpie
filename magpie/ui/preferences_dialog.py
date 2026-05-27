@@ -235,7 +235,7 @@ class PreferencesDialog(QDialog):
     def _make_hint(text: str) -> QLabel:
         label = QLabel(text)
         label.setTextFormat(Qt.TextFormat.RichText)
-        label.setStyleSheet("color: #6b7280; font-size: 11px;")
+        label.setStyleSheet("color: #4b5563; font-size: 13px; padding: 2px 0;")
         label.setWordWrap(True)
         return label
 
@@ -260,13 +260,13 @@ class PreferencesDialog(QDialog):
             "在列表中选中一项即把它设为当前生效方案。"
         ))
 
-        self.category_preset_view = PresetListView(new_button_text="+ 新建类别方案…")
+        self.category_preset_view = PresetListView(new_button_text="新建类别方案...")
         self.category_preset_view.selectionChanged.connect(self._on_category_selection_changed)
         self.category_preset_view.requestNew.connect(self._on_category_preset_new)
         self.category_preset_view.requestEdit.connect(self._on_category_preset_edit)
         self.category_preset_view.requestDuplicate.connect(self._on_category_preset_duplicate)
         self.category_preset_view.requestDelete.connect(self._on_category_preset_delete)
-        layout.addWidget(self.category_preset_view, stretch=1)
+        layout.addWidget(self.category_preset_view)
 
         self._refresh_category_preset_view()
         return tab
@@ -357,13 +357,13 @@ class PreferencesDialog(QDialog):
             "「分类 → 本目录设置」里单独覆盖。"
         ))
 
-        self.labels_preset_view = PresetListView(new_button_text="+ 新建标签方案…")
+        self.labels_preset_view = PresetListView(new_button_text="新建标签方案...")
         self.labels_preset_view.selectionChanged.connect(self._on_labels_selection_changed)
         self.labels_preset_view.requestNew.connect(self._on_labels_preset_new)
         self.labels_preset_view.requestEdit.connect(self._on_labels_preset_edit)
         self.labels_preset_view.requestDuplicate.connect(self._on_labels_preset_duplicate)
         self.labels_preset_view.requestDelete.connect(self._on_labels_preset_delete)
-        layout.addWidget(self.labels_preset_view, stretch=1)
+        layout.addWidget(self.labels_preset_view)
 
         self._refresh_labels_preset_view()
         return tab
@@ -446,13 +446,13 @@ class PreferencesDialog(QDialog):
             "方案可在不同项目间复用。"
         ))
 
-        self.classes_preset_view = PresetListView(new_button_text="+ 新建 classes 方案…")
+        self.classes_preset_view = PresetListView(new_button_text="新建 classes 方案...")
         self.classes_preset_view.selectionChanged.connect(self._on_classes_selection_changed)
         self.classes_preset_view.requestNew.connect(self._on_classes_preset_new)
         self.classes_preset_view.requestEdit.connect(self._on_classes_preset_edit)
         self.classes_preset_view.requestDuplicate.connect(self._on_classes_preset_duplicate)
         self.classes_preset_view.requestDelete.connect(self._on_classes_preset_delete)
-        layout.addWidget(self.classes_preset_view, stretch=1)
+        layout.addWidget(self.classes_preset_view)
 
         self._refresh_classes_preset_view()
         return tab
@@ -536,13 +536,13 @@ class PreferencesDialog(QDialog):
             "选中一项即作为默认排序。"
         ))
 
-        self.sort_preset_view = PresetListView(new_button_text="+ 新建自定义方案…")
+        self.sort_preset_view = PresetListView(new_button_text="新建自定义方案...")
         self.sort_preset_view.selectionChanged.connect(self._on_sort_selection_changed)
         self.sort_preset_view.requestNew.connect(self._on_sort_preset_new)
         self.sort_preset_view.requestEdit.connect(self._on_sort_preset_edit)
         self.sort_preset_view.requestDuplicate.connect(self._on_sort_preset_duplicate)
         self.sort_preset_view.requestDelete.connect(self._on_sort_preset_delete)
-        layout.addWidget(self.sort_preset_view, stretch=1)
+        layout.addWidget(self.sort_preset_view)
 
         direction_row = QHBoxLayout()
         direction_row.setContentsMargins(0, 6, 0, 0)
@@ -796,16 +796,40 @@ class PreferencesDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-        export_button = QPushButton("导出预设")
-        import_button = QPushButton("导入预设")
-        reset_button = QPushButton("重置为默认")
+        layout.setSpacing(12)
+
+        layout.addWidget(self._make_hint(
+            "导出当前偏好用于备份或迁移；导入会覆盖当前设置。"
+        ))
+
+        actions = QWidget()
+        actions.setMaximumWidth(760)
+        actions_layout = QGridLayout(actions)
+        actions_layout.setContentsMargins(0, 4, 0, 0)
+        actions_layout.setHorizontalSpacing(18)
+        actions_layout.setVerticalSpacing(14)
+
+        def add_action_row(row: int, title: str, description: str, button: QPushButton) -> None:
+            text = QLabel(f"<b>{title}</b><br><span style='color:#6b7280;'>{description}</span>")
+            text.setTextFormat(Qt.TextFormat.RichText)
+            text.setWordWrap(True)
+            button.setFixedWidth(128)
+            actions_layout.addWidget(text, row, 0)
+            actions_layout.addWidget(button, row, 1, Qt.AlignmentFlag.AlignTop)
+
+        export_button = QPushButton("导出...")
+        import_button = QPushButton("导入...")
+        reset_button = QPushButton("重置")
         export_button.clicked.connect(self._export_preset)
         import_button.clicked.connect(self._import_preset)
         reset_button.clicked.connect(self._reset_preferences)
-        layout.addWidget(export_button)
-        layout.addWidget(import_button)
-        layout.addWidget(reset_button)
+
+        add_action_row(0, "导出预设", "保存当前所有首选项和方案配置。", export_button)
+        add_action_row(1, "导入预设", "从 JSON 文件恢复配置，会替换当前设置。", import_button)
+        add_action_row(2, "重置为默认", "清空自定义配置并恢复内置默认值。", reset_button)
+        actions_layout.setColumnStretch(0, 1)
+
+        layout.addWidget(actions)
         layout.addStretch()
         return tab
 

@@ -54,8 +54,8 @@ QFrame#presetRow[active="true"] {
     border: 1px solid #c7d2fe;
 }
 QLabel#presetIcon {
-    font-size: 18px;
-    min-width: 22px;
+    font-size: 20px;
+    min-width: 24px;
     padding-right: 4px;
 }
 QLabel#presetSelectedBar {
@@ -66,12 +66,12 @@ QLabel#presetSelectedBar {
 }
 QLabel#presetTitle {
     color: #111827;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
 }
 QLabel#presetSubtitle {
     color: #6b7280;
-    font-size: 11px;
+    font-size: 12px;
 }
 QLabel#presetBuiltinBadge {
     color: #6b7280;
@@ -212,7 +212,6 @@ class PresetListView(QWidget):
         self._container_layout = QVBoxLayout(self._container)
         self._container_layout.setContentsMargins(0, 0, 0, 0)
         self._container_layout.setSpacing(2)
-        self._container_layout.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidget(self._container)
@@ -220,6 +219,7 @@ class PresetListView(QWidget):
         scroll.setFrameShape(QFrame.Shape.StyledPanel)
         scroll.setStyleSheet("QScrollArea { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; }")
         scroll.setMinimumHeight(220)
+        scroll.setMaximumHeight(430)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         outer.addWidget(scroll, stretch=1)
 
@@ -227,17 +227,21 @@ class PresetListView(QWidget):
         new_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         new_button.setStyleSheet(
-            "QPushButton { color: #2563eb; background: transparent;"
-            " border: 1px dashed #93c5fd; border-radius: 6px; padding: 6px 10px; }"
-            "QPushButton:hover { background: #eff6ff; }"
+            "QPushButton { color: #1f2937; background: #ffffff;"
+            " border: 1px solid #d1d5db; border-radius: 4px;"
+            " padding: 5px 12px; }"
+            "QPushButton:hover { background: #f3f4f6; border-color: #c7ccd4; }"
+            "QPushButton:pressed { background: #e5e7eb; }"
         )
         new_button.clicked.connect(self.requestNew.emit)
         outer.addWidget(new_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
     def set_presets(self, items: list[PresetItem], active_id: str) -> None:
-        for row in self._rows:
-            self._container_layout.removeWidget(row)
-            row.deleteLater()
+        while self._container_layout.count():
+            item = self._container_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         self._rows.clear()
 
         # Group builtins first, then a separator, then customs (only if both exist).
@@ -250,8 +254,7 @@ class PresetListView(QWidget):
             row.requestEdit.connect(self.requestEdit.emit)
             row.requestDuplicate.connect(self.requestDuplicate.emit)
             row.requestDelete.connect(self.requestDelete.emit)
-            insert_at = self._container_layout.count() - 1  # before stretch
-            self._container_layout.insertWidget(insert_at, row)
+            self._container_layout.addWidget(row)
             self._rows.append(row)
 
         for item in builtins:
@@ -260,7 +263,7 @@ class PresetListView(QWidget):
             sep = QFrame()
             sep.setFrameShape(QFrame.Shape.HLine)
             sep.setStyleSheet("color: #e5e7eb;")
-            self._container_layout.insertWidget(self._container_layout.count() - 1, sep)
+            self._container_layout.addWidget(sep)
         for item in customs:
             _add(item)
 
@@ -268,8 +271,10 @@ class PresetListView(QWidget):
             placeholder = QLabel("（尚无方案，点击下方按钮新建）")
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setStyleSheet("color: #9ca3af; padding: 24px;")
-            self._container_layout.insertWidget(self._container_layout.count() - 1, placeholder)
+            self._container_layout.addWidget(placeholder)
             self._rows.append(placeholder)  # so cleanup grabs it next time
+
+        self._container_layout.addStretch(1)
 
         self.set_active(active_id)
 

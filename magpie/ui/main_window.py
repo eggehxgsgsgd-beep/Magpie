@@ -144,7 +144,7 @@ class MainWindow(QMainWindow):
 
     # Right-column (side panel) width — also used to size the footer's
     # right-side undo button so the visual columns line up.
-    _RIGHT_COLUMN_WIDTH = 260
+    _RIGHT_COLUMN_WIDTH = 320
 
     def _create_ui(self) -> None:
         central_widget = QWidget()
@@ -168,7 +168,7 @@ class MainWindow(QMainWindow):
         top_row.addWidget(self.image_view, stretch=1)
 
         self.side_panel = SidePanel()
-        self.side_panel.classifyRequested.connect(self.classify_current_image)
+        self.side_panel.manageCategoriesRequested.connect(self.open_preferences)
         top_row.addWidget(self.side_panel)
 
         root.addLayout(top_row, stretch=1)
@@ -354,6 +354,8 @@ class MainWindow(QMainWindow):
         self.category_shortcuts.clear()
 
         for category in self.active_categories:
+            if not category.key.strip():
+                continue
             shortcut = QShortcut(QKeySequence(category.key), self)
             shortcut.activated.connect(lambda category=category: self.classify_current_image(category))
             self.category_shortcuts.append(shortcut)
@@ -1008,7 +1010,7 @@ class MainWindow(QMainWindow):
                 if output_dir is not None
                 else category.folder_name
             )
-            categories.append((category.label, category.key, target))
+            categories.append((category.label, category.key or "—", target))
         if not categories:
             categories = [("（尚未配置类别）", "—", "前往 文件 → 首选项 添加")]
 

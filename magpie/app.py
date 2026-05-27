@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication
 
 from magpie.config import AppState, Preferences, log_dir
 from magpie.ui import MainWindow
+from magpie.font_config import apply_app_font
 from magpie.ui.style import apply_app_style
 
 
@@ -54,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
     app.setApplicationName("Magpie")
     app.setOrganizationName("Magpie")
+    apply_app_font(app)
     apply_app_style(app)
     icon_path = Path(__file__).resolve().parent / "resources" / "icons" / "magpie_icon.svg"
     if icon_path.exists():
