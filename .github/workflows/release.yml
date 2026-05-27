@@ -70,11 +70,27 @@ jobs:
         if: startsWith(matrix.target, 'macos')
         run: python packaging/build.py --target ${{ matrix.target }}
 
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir -p release-files
+          # Windows: setup exe + portable exe
+          cp dist/*-setup.exe release-files/ 2>/dev/null || true
+          cp dist/*-portable.exe release-files/ 2>/dev/null || true
+          # Linux: .deb
+          cp dist/*.deb release-files/ 2>/dev/null || true
+          # macOS: zip the onedir bundle
+          if [[ "${{ matrix.target }}" == macos-* ]]; then
+            cd dist
+            zip -r ../release-files/Magpie-${MAGPIE_VERSION}-${{ matrix.target }}.zip Magpie-${MAGPIE_VERSION}-${{ matrix.target }}
+            cd ..
+          fi
+          ls -lh release-files/
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Magpie-${{ matrix.target }}
-          path: dist/*
+          path: release-files/*
 
   publish:
     needs: build
@@ -85,6 +101,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-artifacts
+      - name: List release files
+        run: find release-artifacts -type f | sort
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
