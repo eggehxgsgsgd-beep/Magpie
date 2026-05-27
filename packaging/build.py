@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
+ICON_PATH = ROOT / "packaging" / "app.ico"
 
 
 # Supported PyInstaller targets. The artifact filename is derived at runtime
@@ -126,8 +127,13 @@ def main() -> int:
     name = f"Magpie-{version}-{args.target}"
     print(f"[build] target={args.target} version={version} -> {name}")
     entrypoint = ROOT / "magpie" / "ImageClassifierQt.py"
-    icon_path = ROOT / "packaging" / "app.ico"
     separator = ";" if sys.platform.startswith("win") else ":"
+
+    subprocess.run(
+        [sys.executable, str(ROOT / "packaging" / "generate_icons.py")],
+        cwd=ROOT,
+        check=True,
+    )
 
     command: list[str] = [
         sys.executable,
@@ -148,8 +154,8 @@ def main() -> int:
         "--add-data",
         f"{ROOT / 'magpie' / 'resources'}{separator}magpie/resources",
     ]
-    if icon_path.exists():
-        command.extend(["--icon", str(icon_path)])
+    if ICON_PATH.exists():
+        command.extend(["--icon", str(ICON_PATH)])
     for module in EXCLUDED_PYQT6_MODULES:
         command.extend(["--exclude-module", module])
     command.append(str(entrypoint))
