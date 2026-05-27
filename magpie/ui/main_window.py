@@ -289,6 +289,9 @@ class MainWindow(QMainWindow):
         self.shortcuts_action = QAction("快捷键速查", self)
         self.shortcuts_action.triggered.connect(self.show_shortcuts)
 
+        self.docs_action = QAction("使用文档", self)
+        self.docs_action.triggered.connect(self._open_docs)
+
         self.about_action = QAction("关于", self)
         self.about_action.triggered.connect(self.show_about)
 
@@ -323,11 +326,13 @@ class MainWindow(QMainWindow):
         classify_menu.addAction(self.mode_action)
         classify_menu.addSeparator()
         classify_menu.addAction(self.project_settings_action)
-        clear_record_action = classify_menu.addAction("清除本目录分类记录")
+        clear_record_action = classify_menu.addAction("清除已分类标记")
         clear_record_action.triggered.connect(self.clear_current_classification_record)
 
         help_menu = self.menuBar().addMenu("帮助")
         help_menu.addAction(self.shortcuts_action)
+        help_menu.addAction(self.docs_action)
+        help_menu.addSeparator()
         help_menu.addAction(self.about_action)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
@@ -760,7 +765,11 @@ class MainWindow(QMainWindow):
             self.current_index = 0
             self._load_current_image()
         else:
-            self._update_status("已到末尾（当前模式：停留）")
+            QMessageBox.information(
+                self,
+                "浏览完成",
+                f"已浏览完全部 {len(self.image_files)} 张图片，当前文件夹挑选完毕。",
+            )
 
     def toggle_autoplay(self, checked: bool) -> None:
         if checked:
@@ -1020,12 +1029,12 @@ class MainWindow(QMainWindow):
     def clear_current_classification_record(self) -> None:
         if not self.classification_record:
             return
-        if QMessageBox.question(self, "确认清除", "清除本目录分类记录？不会删除输出目录中的图片。") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "确认清除", "清除当前目录所有已分类标记？\n不会删除输出目录中的图片。") != QMessageBox.StandardButton.Yes:
             return
         self.classification_record.clear()
         self._load_current_image(fit=False)
         self._refresh_side_panel()
-        self._update_status("已清除分类记录")
+        self._update_status("已清除已分类标记")
 
     def show_shortcuts(self) -> None:
         dialog = ShortcutsDialog(self._build_shortcut_groups(), self)
@@ -1074,6 +1083,9 @@ class MainWindow(QMainWindow):
             ("分类", classify),
             ("类别快捷键", categories),
         ]
+
+    def _open_docs(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://github.com/eggehxgsgsgd-beep/Magpie"))
 
     def show_about(self) -> None:
         QMessageBox.about(self, "关于", "Magpie\n键盘驱动的本地图像分类工具。")
