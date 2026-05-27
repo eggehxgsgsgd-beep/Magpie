@@ -1,18 +1,52 @@
 ﻿from __future__ import annotations
 
 import argparse
+import atexit
 import logging
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
-from magpie.config import AppState, Preferences, log_dir
+from magpie.config import AppState, Preferences, app_data_dir, log_dir
 from magpie.ui import MainWindow
 from magpie.font_config import apply_app_font
 from magpie.ui.style import apply_app_style
+
+
+_lock_file: Path | None = None
+
+
+def _acquire_lock() -> bool:
+    """Try to acquire a file-based single-instance lock.
+
+    Returns ``True`` if this is the only instance, ``False`` otherwise.
+    """
+    global _lock_file  # noqa: PLW0603
+    lock_path = app_data_dir() / "magpie.lock"
+    if lock_path.exists():
+        # Check if the PID inside is still alive.
+        try:
+            pid = int(lock_path.read_text().strip())
+            # os.kill(pid, 0) doesn't send a signal — just checks existence.
+            import os
+            os.kill(pid, 0)
+            return False  # Process still running.
+        except (ValueError, OSError, ProcessLookupError):
+            pass  # Stale lock — previous crash.
+    lock_path.write_text(str(sys.modules.get("os", __import__("os")).getpid()))
+    _lock_file = lock_path
+    atexit.register(_release_lock)
+    return True
+
+
+def _release_lock() -> None:
+    global _lock_file  # noqa: PLW0603
+    if _lock_file is not None:
+        _lock_file.unlink(missing_ok=True)
+        _lock_file = None
 
 
 def configure_logging() -> None:
@@ -56,6 +90,10 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName("Magpie")
     app.setOrganizationName("Magpie")
     apply_app_font(app)
+
+    if not _acquire_lock():
+        QMessageBox.warning(None, "Magpie", "Magpie 已在运行中，请勿重复启动。")
+        return 1
     apply_app_style(app)
     icon_path = Path(__file__).resolve().parent / "resources" / "icons" / "magpie_icon.svg"
     if icon_path.exists():

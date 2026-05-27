@@ -9,9 +9,12 @@ from .classifier import (
 )
 from .history import OperationHistory
 from .image_loader import CustomSortError, compile_custom_sort_key, list_image_files, load_pixmap
+from .image_loader_worker import ImageLoaderSignals, ImageLoadTask
 
 __all__ = [
     "CustomSortError",
+    "ImageLoaderSignals",
+    "ImageLoadTask",
     "OperationHistory",
     "TargetModifiedError",
     "classify_image",

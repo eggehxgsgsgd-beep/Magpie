@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Magpie
+Comment=A keyboard-driven desktop image classification tool
+Exec=/opt/magpie/Magpie
+Icon=magpie
+Terminal=false
+Type=Application
+Categories=Graphics;Utility;
+StartupWMClass=magpie

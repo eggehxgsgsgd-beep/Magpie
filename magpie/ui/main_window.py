@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QPoint, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QFontMetrics, QKeyEvent, QKeySequence, QShortcut
+from PyQt6.QtCore import QByteArray, QPoint, Qt, QThreadPool, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFontMetrics, QImage, QKeyEvent, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -35,6 +34,7 @@ from magpie.config import (
 )
 from magpie.core import (
     CustomSortError,
+    ImageLoadTask,
     OperationHistory,
     TargetModifiedError,
     classify_image,
@@ -42,7 +42,6 @@ from magpie.core import (
     ensure_category_folders,
     label_path_for_image,
     list_image_files,
-    load_pixmap,
     load_yolo_labels,
     resolve_target_path,
     undo_operation,
@@ -106,8 +105,6 @@ class MainWindow(QMainWindow):
         self.category_shortcuts: list[QShortcut] = []
         self.class_names: list[str] = []
         self.classification_record: ClassificationRecord | None = None
-        self.remembered_conflict_strategy: str | None = None
-        self.batch_conflict_strategy: str | None = None
         # Active project-resolved state. Re-resolved every time a folder opens.
         self.active_sort_preset, self.active_sort_descending = resolve_active_sort(
             self.preferences, None
@@ -123,6 +120,13 @@ class MainWindow(QMainWindow):
         # flushes both.
         self._record_saver: DebouncedSaver | None = None
         self._state_saver = DebouncedSaver(self.state.save, interval_ms=500, parent=self)
+
+        # Async image loading: decode on worker thread, display on GUI thread.
+        self._load_request_id: int = 0
+        self._prefetch_cache: dict[Path, QImage] = {}
+        self._skipped_files: list[str] = []
+        self._loader_pool = QThreadPool(self)
+        self._loader_pool.setMaxThreadCount(2)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.next_image)
@@ -198,12 +202,6 @@ class MainWindow(QMainWindow):
     def _create_status_bar(self) -> None:
         status_bar = self.statusBar()
         status_bar.setSizeGripEnabled(False)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setObjectName("statusProgressBar")
-        self.progress_bar.setFixedWidth(140)
-        self.progress_bar.setVisible(False)
-        status_bar.addWidget(self.progress_bar)
 
         self.index_label = QLabel("0 / 0")
         self.index_label.setObjectName("indexLabel")
@@ -396,6 +394,7 @@ class MainWindow(QMainWindow):
             "output_dir",
             "labels_selection",
             "classes_selection",
+            "conflict_strategy",
             "sort_preset_id",
             "sort_descending",
         ):
@@ -404,6 +403,7 @@ class MainWindow(QMainWindow):
             "output_dir": result.output_dir,
             "labels_selection": result.labels_selection,
             "classes_selection": result.classes_selection,
+            "conflict_strategy": result.conflict_strategy,
             "sort_preset_id": result.sort_preset_id,
             "sort_descending": result.sort_descending,
         }.items():
@@ -573,13 +573,12 @@ class MainWindow(QMainWindow):
             )
             self.active_output_dir = folder_path.parent / f"{folder_path.name}_filtered"
         self.active_labels_dir = resolve_labels_dir(self.preferences, overrides, folder_path)
-        self.class_names = resolve_class_names(self.preferences, overrides)
+        self.class_names = resolve_class_names(self.preferences, overrides, folder_path)
 
         ensure_category_folders(self.active_output_dir, self.active_categories)
         self.history.clear()
-        self.remembered_conflict_strategy = None
-        self.batch_conflict_strategy = None
-        self.side_panel.clear_recent_operations()
+        self._prefetch_cache.clear()
+        self._skipped_files.clear()
 
         if sort_change_mode == "tail":
             # Cursor sits at the boundary between kept prefix and new tail.
@@ -641,26 +640,62 @@ class MainWindow(QMainWindow):
             return
 
         image_path = self.image_files[self.current_index]
-        source_folder = self.state.image_folder
-        try:
-            pixmap = load_pixmap(image_path)
-            if self.show_bbox_action.isChecked() and self.active_labels_dir:
-                boxes = load_yolo_labels(
-                    label_path_for_image(
-                        self.active_labels_dir, image_path, source_folder,
-                    )
-                )
-                pixmap = draw_bboxes_on_pixmap(
-                    pixmap, boxes, self.active_categories, self.class_names
-                )
-        except Exception as exc:
-            self.status.showMessage(f"图片加载失败：{exc}", 5000)
+
+        # Check prefetch cache first — instant display.
+        cached = self._prefetch_cache.pop(image_path, None)
+        if cached is not None:
+            self._apply_loaded_image(image_path, cached, fit)
+            self._prefetch_next()
             return
 
+        # Submit async decode on worker thread.
+        self._load_request_id += 1
+        task = ImageLoadTask(self._load_request_id, image_path)
+        task.signals.finished.connect(
+            lambda rid, path, qimg, _fit=fit: self._on_image_loaded(rid, path, qimg, _fit),
+        )
+        task.signals.error.connect(self._on_image_load_error)
+        self._loader_pool.start(task)
+
+    def _on_image_loaded(self, request_id: int, path: Path, q_image: QImage, fit: bool) -> None:
+        if request_id != self._load_request_id:
+            return  # Stale request — user has already navigated away.
+        self._apply_loaded_image(path, q_image, fit)
+        self._prefetch_next()
+
+    _MAX_CONSECUTIVE_ERRORS = 10
+
+    def _on_image_load_error(self, request_id: int, path: Path, msg: str) -> None:
+        if request_id != self._load_request_id:
+            return
+        self._skipped_files.append(path.name)
+        self.status.showMessage(
+            f"已跳过 {path.name}（加载失败），共跳过 {len(self._skipped_files)} 张", 3000,
+        )
+        # Auto-skip to the next image, with a cap to avoid infinite loops
+        # when an entire folder is unreadable.
+        self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+        if self._consecutive_errors < self._MAX_CONSECUTIVE_ERRORS:
+            self.next_image()
+        else:
+            self.status.showMessage(
+                f"连续 {self._consecutive_errors} 张图片加载失败，已停止自动跳过。", 5000,
+            )
+
+    def _apply_loaded_image(self, image_path: Path, q_image: QImage, fit: bool) -> None:
+        """Convert QImage to QPixmap, draw BBoxes if needed, and display."""
+        self._consecutive_errors = 0
+        pixmap = QPixmap.fromImage(q_image)
+        source_folder = self.state.image_folder
+        if self.show_bbox_action.isChecked() and self.active_labels_dir:
+            boxes = load_yolo_labels(
+                label_path_for_image(
+                    self.active_labels_dir, image_path, source_folder,
+                )
+            )
+            pixmap = draw_bboxes_on_pixmap(pixmap, boxes, self.class_names)
+
         self.image_view.set_pixmap(pixmap, fit=fit)
-        record_key = image_key(image_path, source_folder) if source_folder else image_path.name
-        labels = self.classification_record.labels_for(record_key) if self.classification_record else []
-        self.image_view.set_badge(labels if self.preferences.show_classified_marker else [])
         self.state.current_index = self.current_index
         # Persist navigation progress so a crash / kill doesn't drop us back
         # to index 0. Debounced — actual writes happen at most every 500 ms.
@@ -669,12 +704,34 @@ class MainWindow(QMainWindow):
         self._refresh_side_panel()
         self._update_action_states()
 
+    def _prefetch_next(self) -> None:
+        """Pre-decode upcoming images in the background so browsing feels instant."""
+        count = self.preferences.prefetch_count
+        for offset in range(1, count + 1):
+            idx = self.current_index + offset
+            if idx >= len(self.image_files):
+                break
+            path = self.image_files[idx]
+            if path in self._prefetch_cache:
+                continue
+            task = ImageLoadTask(-1, path)  # request_id -1 = prefetch
+            task.signals.finished.connect(self._on_prefetch_done)
+            self._loader_pool.start(task)
+
+    def _on_prefetch_done(self, _request_id: int, path: Path, q_image: QImage) -> None:
+        self._prefetch_cache[path] = q_image
+        # Evict oldest entries if cache exceeds limit.
+        limit = self.preferences.prefetch_count
+        while len(self._prefetch_cache) > limit:
+            oldest = next(iter(self._prefetch_cache))
+            del self._prefetch_cache[oldest]
+
     def _show_empty_state(self, message: str | None = None) -> None:
         self.image_view.clear()
-        self.image_view.set_badge([])
         self.image_name_label.setText("")
         self.index_label.setText("0 / 0")
         self.path_label.setText("")
+
         self.status.showMessage(message or "请先打开图片文件夹。", 0)
         self._update_action_states()
 
@@ -683,9 +740,12 @@ class MainWindow(QMainWindow):
             return
         if self.current_index > 0:
             self.current_index -= 1
+            self._load_current_image()
         elif self.preferences.end_behavior == "loop":
             self.current_index = len(self.image_files) - 1
-        self._load_current_image()
+            self._load_current_image()
+        else:
+            self._update_status("已到开头")
 
     def next_image(self) -> None:
         if not self.image_files:
@@ -699,10 +759,8 @@ class MainWindow(QMainWindow):
         if self.preferences.end_behavior == "loop":
             self.current_index = 0
             self._load_current_image()
-        elif self.preferences.end_behavior == "prompt":
-            QMessageBox.information(self, "提示", "已经是最后一张图像。")
         else:
-            self._update_status("已经是最后一张图像")
+            self._update_status("已到末尾（当前模式：停留）")
 
     def toggle_autoplay(self, checked: bool) -> None:
         if checked:
@@ -822,7 +880,6 @@ class MainWindow(QMainWindow):
                 image_key(image_path, self.state.image_folder),
                 category.folder_name,
             )
-        self.side_panel.add_recent_operation(operation, category)
         self._refresh_side_panel()
         self.status.showMessage(f"已分类到 {category.folder_name}", 2000)
 
@@ -851,20 +908,18 @@ class MainWindow(QMainWindow):
         if not target.exists():
             return target, "rename"
 
-        strategy = (
-            self.batch_conflict_strategy
-            or self.remembered_conflict_strategy
-            or self.active_conflict_strategy
-        )
+        strategy = self.active_conflict_strategy
         if strategy == "ask":
             dialog = ConflictDialog(str(target), self)
             if not dialog.exec():
                 return None, "cancel"
             strategy = dialog.decision.strategy
-            if dialog.decision.apply_to == "session":
-                self.remembered_conflict_strategy = strategy
-            elif dialog.decision.apply_to == "batch":
-                self.batch_conflict_strategy = strategy
+            if dialog.decision.apply_to == "folder" and self.state.image_folder:
+                # Persist to per-folder overrides so it survives restart.
+                self.active_conflict_strategy = strategy
+                overrides = dict(self.state.per_folder_overrides.get(self.state.image_folder, {}))
+                overrides["conflict_strategy"] = strategy
+                self.state.per_folder_overrides[self.state.image_folder] = overrides
 
         return resolve_target_path(target, strategy), strategy
 
@@ -907,7 +962,6 @@ class MainWindow(QMainWindow):
             key = image_key(operation.source_path, self.state.image_folder) if self.state.image_folder else operation.source_path.name
             self.classification_record.remove(key, operation.category_folder)
         self.current_index = min(operation.index, max(len(self.image_files) - 1, 0))
-        self.side_panel.remove_recent_operation(operation)
         self._load_current_image()
         self._refresh_side_panel()
         if self.preferences.undo_prompt:
@@ -1055,6 +1109,7 @@ class MainWindow(QMainWindow):
 
     def _update_status(self, message: str | None = None) -> None:
         if not self.image_files:
+    
             return
         image_path = self.image_files[self.current_index]
         record_key = image_key(image_path, self.state.image_folder) if self.state.image_folder else image_path.name
@@ -1114,4 +1169,7 @@ class MainWindow(QMainWindow):
         self._state_saver.flush()
         self.state.save()
         self.preferences.save()
+        # Wait for any in-flight image decode tasks before tearing down Qt.
+        self._loader_pool.clear()
+        self._loader_pool.waitForDone(1000)
         super().closeEvent(event)
