@@ -43,7 +43,7 @@ def main() -> int:
     if not SVG_PATH.exists():
         raise FileNotFoundError(SVG_PATH)
 
-    app = QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])  # noqa: F841
 
     rendered = [_render_svg(size) for size in ICON_SIZES]
     for size, image in zip(ICON_SIZES, rendered, strict=True):
