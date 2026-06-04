@@ -164,8 +164,6 @@ def _pyinstaller_command(
         "--distpath",
         str(DIST_DIR),
         "--collect-all",
-        "PyQt6",
-        "--collect-all",
         "PIL",
         "--add-data",
         f"{ROOT / 'magpie' / 'resources'}{separator}magpie/resources",

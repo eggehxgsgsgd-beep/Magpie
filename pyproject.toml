@@ -1,6 +1,6 @@
 [project]
 name = "magpie"
-version = "1.2.2"
+version = "1.2.3"
 description = "A keyboard-driven desktop image classification tool"
 readme = "magpie/README.md"
 requires-python = ">=3.10"
