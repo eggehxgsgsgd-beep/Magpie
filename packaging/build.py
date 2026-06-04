@@ -75,6 +75,7 @@ EXCLUDED_PYQT6_MODULES = [
     "PyQt6.QtWebEngineWidgets",
     "PyQt6.QtWebSockets",
     "PyQt6.QtWebView",
+    "pkg_resources",
 ]
 
 # Directory name fragments that almost always carry an alternative
