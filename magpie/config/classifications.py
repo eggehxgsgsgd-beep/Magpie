@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -102,7 +102,7 @@ class ClassificationRecord:
                 {
                     "schema_version": SCHEMA_VERSION,
                     "source_folder": self.source_folder,
-                    "last_updated": datetime.now(UTC).isoformat(),
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
                     "entries": self.entries,
                 },
                 ensure_ascii=False,
