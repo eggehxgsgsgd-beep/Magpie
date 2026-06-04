@@ -231,6 +231,14 @@ def _build_deb(*, version: str, onedir_path: Path) -> Path:
         app_dir = staging / "opt" / "magpie"
         app_dir.mkdir(parents=True)
         shutil.copytree(onedir_path, app_dir, dirs_exist_ok=True)
+        bundled_executable = app_dir / onedir_path.name
+        desktop_executable = app_dir / "Magpie"
+        if not bundled_executable.exists():
+            raise FileNotFoundError(
+                f"Expected PyInstaller executable not found: {bundled_executable}"
+            )
+        bundled_executable.rename(desktop_executable)
+        desktop_executable.chmod(0o755)
 
         # Desktop entry
         apps_dir = staging / "usr" / "share" / "applications"

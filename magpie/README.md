@@ -11,7 +11,7 @@ Magpie 是一个键盘驱动的本地图像分类桌面工具，适合数据清�
 ## 安装开发环境
 
 ```bash
-uv venv --python 3.11 .venv
+uv venv --python 3.10 .venv
 uv pip install -e ".[dev]"
 ```
 

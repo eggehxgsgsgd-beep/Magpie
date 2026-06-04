@@ -1,20 +1,21 @@
 [project]
 name = "magpie"
-version = "1.2.0"
+version = "1.2.1"
 description = "A keyboard-driven desktop image classification tool"
 readme = "magpie/README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [{ name = "mangoa", email = "3508312371@qq.com" }]
 dependencies = [
-    "PyQt6>=6.4",
-    "Pillow>=10.4",
+    "PyQt6>=6.4,<6.6",
+    "PyQt6-Qt6>=6.4,<6.6",
+    "Pillow>=9.0,<11",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.8",
-    "pyinstaller>=6.0",
+    "pyinstaller>=6.0,<6.12",
 ]
 
 [project.scripts]
